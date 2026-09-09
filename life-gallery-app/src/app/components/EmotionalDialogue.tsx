@@ -35,12 +35,7 @@ function extractOption(text: string, index: 1 | 2 | 3): string {
 }
 
 function formatChoice(option: string): string {
-  const cleaned = option.replace(/^[①②③]\s*/, "").trim();
-  const separator = cleaned.search(/[：:]/);
-  if (separator < 0) return "我觉得分身更接近「" + cleaned + "」";
-  const name = cleaned.slice(0, separator).trim();
-  const clue = cleaned.slice(separator + 1).trim();
-  return "我觉得分身更接近「" + name + "」：" + clue;
+  return option.replace(/^[①②③]\s*/, "").trim();
 }
 function narrativePart(text: string): string {
   const firstMarker = text.indexOf("①");
@@ -141,7 +136,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
     setMessages((current) => [
       ...current,
       { role: "assistant", content: currentAiText },
-      { role: "user", content: "旁观者确认：" + confirmedText },
+      { role: "user", content: confirmedText },
     ]);
     setTimeout(onNext, 320);
   };

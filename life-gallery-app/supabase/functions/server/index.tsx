@@ -22,8 +22,11 @@ const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你
 
 三轮逐步深入：
 - 第1轮：区分事情发生后最直接的情绪反应。
-- 第2轮：只在旁观者刚选中的感受内部区分细微体验，不解释成因、动机、需求或未来后果。
-- 第3轮：只在前两轮已经确认的范围内收拢，给出三个接近但侧重点不同的最终情绪名称。
+- 第2轮：把旁观者刚选中的感受当作父范围，三个候选必须是这个范围内更具体的子感受，不得跳到新的情绪方向。
+- 第3轮：把第2轮选中的子感受继续收窄，三个候选必须是彼此相近、侧重点略有不同的最终情绪名称。
+- 每轮只缩小一次范围。不得重新解释原事件，不得推翻或横向扩展上一轮的选择。
+- 情绪名称必须描述“我”的内在状态。禁止用“冷漠、敷衍、疏离、忽视、不尊重、不关心”等评价他人态度的词作为候选。
+- 示例：上一轮选择“被忽视”，下一轮可区分“委屈、失落、孤单”，不可输出“冷漠、敷衍、疏离”。
 
 每次严格输出：
 1. 一句第一人称内在感受，18至42个汉字；不得增加新的事情经过。
@@ -102,7 +105,9 @@ function isValidDialogueReply(text: string, previousAssistant = "", description 
     if (separator <= 0) return false;
     const name = option.slice(0, separator).trim();
     const explanation = option.slice(separator + 1).trim();
+    const judgmentNames = ["冷漠", "敷衍", "疏离", "忽视", "不尊重", "不关心", "漠视"];
     if (!name || !explanation || name.length > 8 || explanation.length > 36) return false;
+    if (judgmentNames.some((word) => name.includes(word))) return false;
     names.push(name);
   }
   return new Set(names).size === 3;
@@ -258,6 +263,7 @@ serve(async (req: Request) => {
   const observerSignals = dialogueHistory
     .filter((message) => message.role === "user")
     .map((message) => message.content.trim());
+  const selectedScope = observerSignals.at(-1) ?? "";
   const previousEmotionNames = dialogueHistory
     .filter((message) => message.role === "assistant")
     .flatMap((message) => dialogueOptionNames(message.content));
@@ -268,9 +274,11 @@ serve(async (req: Request) => {
     emotionLabel + "，程度" + intensityDesc,
     "【旁观者已经选择的感觉线索｜不是事件事实】",
     observerSignals.length ? observerSignals.join("\n") : "尚未选择",
-    "【上一轮已经用过的情绪词｜避免原样重复】",
+    "【本轮必须继续收窄的唯一父范围】",
+    selectedScope || (round === 1 ? emotionLabel : "未提供"),
+    "【上一轮已经用过的情绪词｜只用于确认父子范围】",
     previousEmotionNames.length ? previousEmotionNames.join("、") : "无",
-    "只能从唯一事实源引用事情经过；其余区块只用于辨认感受，严禁据此创造新剧情。",
+    "只能从唯一事实源引用事情经过；其余区块只用于辨认感受。第2、3轮的三个答案必须都属于唯一父范围，严禁创造新剧情或评价他人态度。",
   ].join("\n");
   const apiMessages: ChatMessage[] = [
     { role: "system", content: DIALOGUE_SYSTEM_PROMPT + "\n\n" + roundInstruction },
@@ -282,7 +290,7 @@ serve(async (req: Request) => {
   if (isValidDialogueReply(first.reply, previousAssistant, description)) return respond({ reply: first.reply });
 
   const retryMessages = apiMessages.map((message, index) => index === 0
-    ? { ...message, content: message.content + " 上一版没有满足格式、长度或递进要求。请完全换一种开场和问法，直接回应旁观者刚才的选择；一个共同问题，三个不同且完整的编号候选；不写“解释”，不补充用户没有说过的事实，总字数不超过220字。" }
+    ? { ...message, content: message.content + " 上一版没有满足格式、长度或递进要求。直接沿着本轮唯一父范围向下细分，三个答案都必须是父范围内的内在情绪，不得换方向，不得评价他人；一个共同问题，三个不同且完整的编号候选；不写“解释”，不补充用户没有说过的事实，总字数不超过220字。" }
     : message);
   const retry = await callZhipuWithBusyRetry(apiKey, retryMessages, 360);
   if (!retry.ok) return errorResponse(respond, retry.error);
