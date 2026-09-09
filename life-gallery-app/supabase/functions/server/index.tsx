@@ -22,7 +22,7 @@ const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你
 
 三轮逐步深入：
 - 第1轮：区分事情发生后最直接的情绪反应。
-- 第2轮：只根据旁观者刚选中的感受，区分背后的在意、期待或受伤之处。
+- 第2轮：只在旁观者刚选中的感受内部区分细微体验，不解释成因、动机、需求或未来后果。
 - 第3轮：只在前两轮已经确认的范围内收拢，给出三个接近但侧重点不同的最终情绪名称。
 
 每次严格输出：
@@ -30,7 +30,7 @@ const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你
 2. 一个可由三个候选共同回答的问题，15至35个汉字；不要使用只有两个答案的“是……还是……”。
 3. 三个候选各占一行，格式为“①情绪名称：第一人称体验线索”。②、③同理。
 
-候选的情绪名称为2至6个汉字；体验线索不超过28个汉字；三项必须是不同的内在体验。整段不超过220个汉字。第2、3轮直接回应刚选中的差异，不重复上一轮的开场、问题和候选，不复述事情经过，不给建议，不作诊断，不说教，不输出标题、分析过程或模板文字。只输出给用户看的正文。`;
+候选的情绪名称为2至6个汉字；体验线索不超过28个汉字；三项必须是不同的内在体验。整段不超过220个汉字。只描述情绪本身，不写身体隐喻，不推测“害怕失去、失去掌控、想逃离、切断联系”等原因或剧情，除非这些词原本就在用户描述中。问题不得使用“是不是、是否、会不会、为什么”。第2、3轮直接回应刚选中的差异，不重复上一轮的开场、问题和候选，不复述事情经过，不给建议，不作诊断，不说教，不输出标题、分析过程或模板文字。只输出给用户看的正文。`;
 
 type ChatMessage = { role: "system" | "assistant" | "user"; content: string };
 
@@ -78,7 +78,7 @@ function dialogueOptionNames(text: string): string[] {
     return separator > 0 ? [option.slice(0, separator).trim()] : [];
   });
 }
-function isValidDialogueReply(text: string, previousAssistant = ""): boolean {
+function isValidDialogueReply(text: string, previousAssistant = "", description = ""): boolean {
   if (text.length > 260) return false;
   if (previousAssistant && dialogueLead(text) === dialogueLead(previousAssistant)) return false;
   const markers = ["①", "②", "③"];
@@ -89,6 +89,10 @@ function isValidDialogueReply(text: string, previousAssistant = ""): boolean {
   if (!text.slice(0, positions[0]).includes("？")) return false;
   const placeholders = ["情绪词", "一句描述", "待填写", "选项一", "选项二", "选项三", "解释：", "解释:", "这说明"];
   if (placeholders.some((word) => text.includes(word))) return false;
+  const bannedQuestions = ["是不是", "是否", "会不会", "为什么", "意味着", "这说明"];
+  if (bannedQuestions.some((word) => text.includes(word))) return false;
+  const inferredDetails = ["害怕", "失去", "掌控", "逃离", "切断", "被迫", "未知挑战", "熟悉的圈子", "陌生环境", "身体", "胸口", "呼吸", "心跳", "发抖", "灌了铅"];
+  if (inferredDetails.some((word) => text.includes(word) && !description.includes(word))) return false;
 
   const names: string[] = [];
   for (let i = 0; i < markers.length; i += 1) {
@@ -233,7 +237,7 @@ serve(async (req: Request) => {
   const roundInstruction = round === 1
     ? "本次执行第1轮：辨认最直接的情绪反应。"
     : round === 2
-    ? "本次执行第2轮：回应用户刚才的选择，探到这份感受背后的在意或受伤之处；不得重复上一轮。"
+    ? "本次执行第2轮：回应用户刚才的选择，只区分这份感受内部的细微体验；不得猜测原因、动机或未来后果，不得重复上一轮。"
     : "本次执行第3轮：回应用户刚才的选择，在已有范围内收拢为三个最终情绪；不得重复前两轮。";
   const observerSignals = dialogueHistory
     .filter((message) => message.role === "user")
@@ -259,13 +263,13 @@ serve(async (req: Request) => {
 
   const first = await callZhipuWithBusyRetry(apiKey, apiMessages, 360);
   if (!first.ok) return errorResponse(respond, first.error);
-  if (isValidDialogueReply(first.reply, previousAssistant)) return respond({ reply: first.reply });
+  if (isValidDialogueReply(first.reply, previousAssistant, description)) return respond({ reply: first.reply });
 
   const retryMessages = apiMessages.map((message, index) => index === 0
     ? { ...message, content: message.content + " 上一版没有满足格式、长度或递进要求。请完全换一种开场和问法，直接回应旁观者刚才的选择；一个共同问题，三个不同且完整的编号候选；不写“解释”，不补充用户没有说过的事实，总字数不超过220字。" }
     : message);
   const retry = await callZhipuWithBusyRetry(apiKey, retryMessages, 360);
   if (!retry.ok) return errorResponse(respond, retry.error);
-  if (!isValidDialogueReply(retry.reply, previousAssistant)) return formatErrorResponse(respond);
+  if (!isValidDialogueReply(retry.reply, previousAssistant, description)) return formatErrorResponse(respond);
   return respond({ reply: retry.reply });
 });
