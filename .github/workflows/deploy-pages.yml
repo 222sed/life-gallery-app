@@ -35,7 +35,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: life-gallery-app
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build application
         working-directory: life-gallery-app
