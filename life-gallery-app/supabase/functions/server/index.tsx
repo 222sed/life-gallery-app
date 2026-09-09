@@ -1,0 +1,242 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+const ZHIPU_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const MODEL = "glm-4.7-flashx";
+
+const SYSTEM_PROMPT = "你是情绪记录应用中的倾听者。根据用户选择的情绪、强度和输入内容，只输出一句自然、温和的中文追问，邀请用户继续表达。优先围绕用户提到的具体事情，询问感受或原因；输入含义不清时温和澄清，不擅自解读。不复述强度数值，不给建议，不作诊断，不用固定套话。只问一个问题，尽量控制在20至40个汉字，保证句子完整。";
+
+const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你用第一人称“我”承接故事里的情绪，用户以旁观者身份帮助“我”把感受说清楚。目标是辨认情绪，而不是分析对错或解决问题。
+
+事实边界：只能使用用户明确说过的信息。不得补写环境、动作、台词、身体反应、结果、动机或经历；用户没说淋雨，就不能写身体被淋湿，用户没说看窗外，就不能写正在看窗外。开场只朴素转述已经明确的处境和内心感受，不用场景描写或文学比喻。对尚未确认的感受使用“像是”“也许”“更接近”等试探语气，不替用户下结论。
+
+三轮逐步深入：
+- 第1轮：区分事情发生后最直接的情绪反应。
+- 第2轮：根据用户上一轮选择，区分这份情绪背后的在意、期待或受伤之处。
+- 第3轮：只在已经出现的范围内收拢，给出三个接近但侧重点不同的最终情绪名称，供用户确认。
+
+每次严格输出以下内容：
+1. 一句第一人称感受，只承接用户已经提供的信息，18至42个汉字。
+2. 一个能由下面三个候选共同回答的问题，15至35个汉字。不要写成只包含两个答案的“是……还是……”问句。
+3. 三个候选各占一行，格式必须为“①情绪名称：第一人称体验线索”。②、③同理。
+
+候选要求：情绪名称为2至6个汉字；体验线索不超过28个汉字；三个候选必须是不同的内在体验，并紧扣当前对话。用可感受到的内心语言区分它们，不写词典定义，不使用“解释”“这说明”“可能是因为”。
+
+整段不超过220个汉字。第2、3轮不得重复上一轮的开场句、问题或候选表述；必须直接回应用户刚选中的差异，让辨认继续向前推进。不要复述事情经过，不给建议，不作诊断，不说教，不急着安慰，不输出标题、分析过程或模板占位文字。只输出给用户看的正文。`;
+
+type ChatMessage = { role: "system" | "assistant" | "user"; content: string };
+
+type ZhipuError =
+  | { kind: "network"; detail: string }
+  | { kind: "api_error"; zhipuStatus: number; detail: string }
+  | { kind: "empty_reply"; finishReason: string; usage: unknown };
+
+type ZhipuResult =
+  | { ok: true; reply: string; finishReason: string }
+  | { ok: false; error: ZhipuError };
+
+function validateMessages(messages: unknown, allowSystem: boolean, allowEmpty = false): string | null {
+  if (!Array.isArray(messages) || messages.length > 12 || (!allowEmpty && messages.length === 0)) {
+    return "messages 必须是1至12条";
+  }
+  for (const message of messages) {
+    if (!message || typeof message !== "object") return "messages 包含无效项";
+    const item = message as Record<string, unknown>;
+    const validRoles = allowSystem ? ["system", "assistant", "user"] : ["assistant", "user"];
+    if (typeof item.role !== "string" || !validRoles.includes(item.role)) {
+      return "messages role 无效";
+    }
+    if (typeof item.content !== "string" || item.content.trim().length === 0 || item.content.length > 2000) {
+      return "messages content 无效";
+    }
+  }
+  return null;
+}
+
+function dialogueLead(text: string): string {
+  const firstMarker = text.indexOf("①");
+  return (firstMarker >= 0 ? text.slice(0, firstMarker) : text)
+    .replace(/[\s，。！？、；：,.!?;:”“"'‘’（）()]/g, "");
+}
+
+function isValidDialogueReply(text: string, previousAssistant = ""): boolean {
+  if (text.length > 260) return false;
+  if (previousAssistant && dialogueLead(text) === dialogueLead(previousAssistant)) return false;
+  const markers = ["①", "②", "③"];
+  const positions = markers.map((marker) => text.indexOf(marker));
+  if (positions.some((position) => position < 0) || positions[0] >= positions[1] || positions[1] >= positions[2]) {
+    return false;
+  }
+  if (!text.slice(0, positions[0]).includes("？")) return false;
+  const placeholders = ["情绪词", "一句描述", "待填写", "选项一", "选项二", "选项三", "解释：", "解释:", "这说明"];
+  if (placeholders.some((word) => text.includes(word))) return false;
+
+  const names: string[] = [];
+  for (let i = 0; i < markers.length; i += 1) {
+    const end = i < 2 ? positions[i + 1] : text.length;
+    const option = text.slice(positions[i] + 1, end).trim();
+    const separator = option.search(/[：:]/);
+    if (separator <= 0) return false;
+    const name = option.slice(0, separator).trim();
+    const explanation = option.slice(separator + 1).trim();
+    if (!name || !explanation || name.length > 8 || explanation.length > 36) return false;
+    names.push(name);
+  }
+  return new Set(names).size === 3;
+}
+
+async function callZhipu(apiKey: string, messages: ChatMessage[], maxTokens: number): Promise<ZhipuResult> {
+  const messageError = validateMessages(messages, true);
+  if (messageError) {
+    return { ok: false, error: { kind: "api_error", zhipuStatus: 400, detail: messageError } };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 35000);
+  let res: Response;
+  try {
+    res = await fetch(ZHIPU_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
+      body: JSON.stringify({ model: MODEL, messages, stream: false, max_tokens: maxTokens, temperature: 0.65, thinking: { type: "disabled" } }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    console.error("[zhipu] network error:", String(error));
+    return { ok: false, error: { kind: "network", detail: String(error) } };
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!res.ok) {
+    let body = "";
+    try { body = await res.text(); } catch (_) { /* ignore */ }
+    console.error("[zhipu] api_error http=" + res.status + " body=" + body);
+    return { ok: false, error: { kind: "api_error", zhipuStatus: res.status, detail: body } };
+  }
+
+  let data: Record<string, unknown>;
+  try {
+    data = await res.json();
+  } catch (error) {
+    console.error("[zhipu] invalid JSON response:", String(error));
+    return { ok: false, error: { kind: "api_error", zhipuStatus: res.status, detail: "invalid JSON response" } };
+  }
+
+  const choices = Array.isArray(data.choices) ? data.choices : [];
+  const choice = choices[0] && typeof choices[0] === "object" ? choices[0] as Record<string, unknown> : {};
+  const message = choice.message && typeof choice.message === "object" ? choice.message as Record<string, unknown> : {};
+  const reply = typeof message.content === "string" ? message.content : "";
+  const finishReason = typeof choice.finish_reason === "string" ? choice.finish_reason : "unknown";
+  if (!reply.trim()) {
+    return { ok: false, error: { kind: "empty_reply", finishReason, usage: data.usage ?? null } };
+  }
+  return { ok: true, reply: reply.trim(), finishReason };
+}
+
+async function callZhipuWithBusyRetry(
+  apiKey: string,
+  messages: ChatMessage[],
+  maxTokens: number,
+): Promise<ZhipuResult> {
+  const result = await callZhipu(apiKey, messages, maxTokens);
+  if (result.ok || result.error.kind !== "api_error" || result.error.zhipuStatus !== 429) {
+    return result;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  return callZhipu(apiKey, messages, maxTokens);
+}
+
+function errorResponse(respond: (body: unknown, status: number) => Response, err: ZhipuError): Response {
+  if (err.kind === "network") return respond({ errorType: "network", error: "网络连接失败" }, 503);
+  if (err.kind === "api_error") {
+    if (err.zhipuStatus === 429) {
+      return respond({ errorType: "busy", error: "免费模型当前繁忙，请稍后重试" }, 429);
+    }
+    const httpStatus = err.zhipuStatus >= 400 && err.zhipuStatus < 500 ? err.zhipuStatus : 502;
+    return respond({ errorType: "api_error", error: "模型服务请求失败", zhipuStatus: err.zhipuStatus, detail: err.detail }, httpStatus);
+  }
+  return respond({ errorType: "empty_reply", error: "模型返回空内容", finishReason: err.finishReason }, 422);
+}
+
+function formatErrorResponse(respond: (body: unknown, status: number) => Response): Response {
+  return respond({ errorType: "format_error", error: "回复格式不完整，请重新生成" }, 422);
+}
+
+serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  const url = new URL(req.url);
+  const route = url.pathname.split("/").filter(Boolean).pop() ?? "";
+  const respond = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+
+  if (req.method !== "POST" || (route !== "ai-chat" && route !== "dialogue")) {
+    return respond({ error: "Not found" }, 404);
+  }
+
+  const apiKey = Deno.env.get("ZHIPU_API_KEY");
+  if (!apiKey) return respond({ error: "ZHIPU_API_KEY secret not configured" }, 500);
+
+  let body: Record<string, unknown>;
+  try { body = await req.json(); } catch (_) { return respond({ error: "Invalid JSON body" }, 400); }
+
+  if (route === "ai-chat") {
+    const userMessage = typeof body.userMessage === "string" ? body.userMessage.trim() : "";
+    const intensity = body.intensity;
+    const emotionLabel = typeof body.emotionLabel === "string" ? body.emotionLabel.trim() : "平静";
+    if (!userMessage || userMessage.length > 500) return respond({ error: "userMessage 无效" }, 400);
+    if (typeof intensity !== "number" || intensity < 0 || intensity > 100) return respond({ error: "intensity 无效" }, 400);
+    const intensityDesc = intensity < 30 ? "轻微" : intensity < 60 ? "中等" : intensity < 85 ? "强烈" : "非常强烈";
+    const result = await callZhipuWithBusyRetry(apiKey, [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: "我现在感到" + emotionLabel + "，程度" + intensityDesc + "（" + intensity + "%）。" + userMessage },
+    ], 300);
+    if (!result.ok) return errorResponse(respond, result.error);
+    return respond({ reply: result.reply });
+  }
+
+  const round = body.round;
+  const intensity = body.intensity;
+  const description = typeof body.description === "string" ? body.description.trim() : "";
+  const emotionLabel = typeof body.emotionLabel === "string" ? body.emotionLabel.trim() : "平静";
+  if (!Number.isInteger(round) || (round as number) < 1 || (round as number) > 3) return respond({ error: "round 无效" }, 400);
+  if (typeof intensity !== "number" || intensity < 0 || intensity > 100) return respond({ error: "intensity 无效" }, 400);
+  if (description.length > 500) return respond({ error: "description 无效" }, 400);
+  const messageError = validateMessages(body.messages, false, true);
+  if (messageError) return respond({ error: messageError }, 400);
+
+  const intensityDesc = intensity < 30 ? "轻微" : intensity < 60 ? "中等" : intensity < 85 ? "强烈" : "非常强烈";
+  const dialogueHistory = body.messages as ChatMessage[];
+  const previousAssistant = [...dialogueHistory].reverse().find((message) => message.role === "assistant")?.content ?? "";
+  const roundInstruction = round === 1
+    ? "本次执行第1轮：辨认最直接的情绪反应。"
+    : round === 2
+    ? "本次执行第2轮：回应用户刚才的选择，探到这份感受背后的在意或受伤之处；不得重复上一轮。"
+    : "本次执行第3轮：回应用户刚才的选择，在已有范围内收拢为三个最终情绪；不得重复前两轮。";
+  const contextMsg = "用户最初选择的情绪是“" + emotionLabel + "”，程度为" + intensityDesc + (description ? "。用户原始描述：“" + description + "”" : "") + "。把最初情绪当作线索而不是结论。";
+  const apiMessages: ChatMessage[] = [
+    { role: "system", content: DIALOGUE_SYSTEM_PROMPT + "\n\n" + roundInstruction },
+    { role: "user", content: contextMsg },
+    ...dialogueHistory,
+  ];
+
+  const first = await callZhipuWithBusyRetry(apiKey, apiMessages, 360);
+  if (!first.ok) return errorResponse(respond, first.error);
+  if (isValidDialogueReply(first.reply, previousAssistant)) return respond({ reply: first.reply });
+
+  const retryMessages = apiMessages.map((message, index) => index === 0
+    ? { ...message, content: message.content + " 上一版没有满足格式、长度或递进要求。请完全换一种开场和问法，直接回应旁观者刚才的选择；一个共同问题，三个不同且完整的编号候选；不写“解释”，不补充用户没有说过的事实，总字数不超过220字。" }
+    : message);
+  const retry = await callZhipuWithBusyRetry(apiKey, retryMessages, 360);
+  if (!retry.ok) return errorResponse(respond, retry.error);
+  if (!isValidDialogueReply(retry.reply, previousAssistant)) return formatErrorResponse(respond);
+  return respond({ reply: retry.reply });
+});

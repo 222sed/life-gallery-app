@@ -1,0 +1,9 @@
+人生画廊APP (Copy).zip
+life-gallery-app/node_modules/
+life-gallery-app/dist/
+life-gallery-app/.env
+life-gallery-app/.env.*
+!life-gallery-app/.env.example
+.DS_Store
+Thumbs.db
+*.log
