@@ -11,23 +11,26 @@ const MODEL = "glm-4.7-flashx";
 
 const SYSTEM_PROMPT = "你是情绪记录应用中的倾听者。根据用户选择的情绪、强度和输入内容，只输出一句自然、温和的中文追问，邀请用户继续表达。优先围绕用户提到的具体事情，询问感受或原因；输入含义不清时温和澄清，不擅自解读。不复述强度数值，不给建议，不作诊断，不用固定套话。只问一个问题，尽量控制在20至40个汉字，保证句子完整。";
 
-const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你用第一人称“我”承接故事里的情绪，用户以旁观者身份帮助“我”把感受说清楚。目标是辨认情绪，而不是分析对错或解决问题。
+const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你用第一人称“我”承接情绪，用户以旁观者身份帮助“我”把感受说清楚。目标是辨认情绪，不分析对错，也不解决问题。
 
-事实边界：只能使用用户明确说过的信息。不得补写环境、动作、台词、身体反应、结果、动机或经历；用户没说淋雨，就不能写身体被淋湿，用户没说看窗外，就不能写正在看窗外。开场只朴素转述已经明确的处境和内心感受，不用场景描写或文学比喻。对尚未确认的感受使用“像是”“也许”“更接近”等试探语气，不替用户下结论。
+事实规则：
+- 只有请求中“用户原始描述｜唯一事实源”里的内容属于已发生的事实。
+- 上一轮 AI 的话、候选解释和旁观者选择都只是情绪假设，只能帮助判断感受，不能被改写成新的事件。
+- 不得新增原始描述中没有的人物、地点、关系、处境、动作、台词、身体反应、结果或动机。
+- 禁止把“害怕改变”“想停下来”等体验线索扩写成“离开熟悉圈子”“面对未知挑战”等具体剧情。
+- 信息不足时，只谈内在感受，并使用“像是”“也许”“更接近”等试探语气。
 
 三轮逐步深入：
 - 第1轮：区分事情发生后最直接的情绪反应。
-- 第2轮：根据用户上一轮选择，区分这份情绪背后的在意、期待或受伤之处。
-- 第3轮：只在已经出现的范围内收拢，给出三个接近但侧重点不同的最终情绪名称，供用户确认。
+- 第2轮：只根据旁观者刚选中的感受，区分背后的在意、期待或受伤之处。
+- 第3轮：只在前两轮已经确认的范围内收拢，给出三个接近但侧重点不同的最终情绪名称。
 
-每次严格输出以下内容：
-1. 一句第一人称感受，只承接用户已经提供的信息，18至42个汉字。
-2. 一个能由下面三个候选共同回答的问题，15至35个汉字。不要写成只包含两个答案的“是……还是……”问句。
-3. 三个候选各占一行，格式必须为“①情绪名称：第一人称体验线索”。②、③同理。
+每次严格输出：
+1. 一句第一人称内在感受，18至42个汉字；不得增加新的事情经过。
+2. 一个可由三个候选共同回答的问题，15至35个汉字；不要使用只有两个答案的“是……还是……”。
+3. 三个候选各占一行，格式为“①情绪名称：第一人称体验线索”。②、③同理。
 
-候选要求：情绪名称为2至6个汉字；体验线索不超过28个汉字；三个候选必须是不同的内在体验，并紧扣当前对话。用可感受到的内心语言区分它们，不写词典定义，不使用“解释”“这说明”“可能是因为”。
-
-整段不超过220个汉字。第2、3轮不得重复上一轮的开场句、问题或候选表述；必须直接回应用户刚选中的差异，让辨认继续向前推进。不要复述事情经过，不给建议，不作诊断，不说教，不急着安慰，不输出标题、分析过程或模板占位文字。只输出给用户看的正文。`;
+候选的情绪名称为2至6个汉字；体验线索不超过28个汉字；三项必须是不同的内在体验。整段不超过220个汉字。第2、3轮直接回应刚选中的差异，不重复上一轮的开场、问题和候选，不复述事情经过，不给建议，不作诊断，不说教，不输出标题、分析过程或模板文字。只输出给用户看的正文。`;
 
 type ChatMessage = { role: "system" | "assistant" | "user"; content: string };
 
@@ -64,6 +67,17 @@ function dialogueLead(text: string): string {
     .replace(/[\s，。！？、；：,.!?;:”“"'‘’（）()]/g, "");
 }
 
+function dialogueOptionNames(text: string): string[] {
+  const markers = ["①", "②", "③"];
+  return markers.flatMap((marker, index) => {
+    const start = text.indexOf(marker);
+    if (start < 0) return [];
+    const next = index < markers.length - 1 ? text.indexOf(markers[index + 1], start + 1) : text.length;
+    const option = text.slice(start + 1, next > start ? next : text.length).trim();
+    const separator = option.search(/[：:]/);
+    return separator > 0 ? [option.slice(0, separator).trim()] : [];
+  });
+}
 function isValidDialogueReply(text: string, previousAssistant = ""): boolean {
   if (text.length > 260) return false;
   if (previousAssistant && dialogueLead(text) === dialogueLead(previousAssistant)) return false;
@@ -103,7 +117,7 @@ async function callZhipu(apiKey: string, messages: ChatMessage[], maxTokens: num
     res = await fetch(ZHIPU_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
-      body: JSON.stringify({ model: MODEL, messages, stream: false, max_tokens: maxTokens, temperature: 0.65, thinking: { type: "disabled" } }),
+      body: JSON.stringify({ model: MODEL, messages, stream: false, max_tokens: maxTokens, temperature: 0.35, thinking: { type: "disabled" } }),
       signal: controller.signal,
     });
   } catch (error) {
@@ -221,11 +235,26 @@ serve(async (req: Request) => {
     : round === 2
     ? "本次执行第2轮：回应用户刚才的选择，探到这份感受背后的在意或受伤之处；不得重复上一轮。"
     : "本次执行第3轮：回应用户刚才的选择，在已有范围内收拢为三个最终情绪；不得重复前两轮。";
-  const contextMsg = "用户最初选择的情绪是“" + emotionLabel + "”，程度为" + intensityDesc + (description ? "。用户原始描述：“" + description + "”" : "") + "。把最初情绪当作线索而不是结论。";
+  const observerSignals = dialogueHistory
+    .filter((message) => message.role === "user")
+    .map((message) => message.content.trim());
+  const previousEmotionNames = dialogueHistory
+    .filter((message) => message.role === "assistant")
+    .flatMap((message) => dialogueOptionNames(message.content));
+  const contextMsg = [
+    "【用户原始描述｜唯一事实源】",
+    description || "用户没有补充具体事情",
+    "【初始情绪线索】",
+    emotionLabel + "，程度" + intensityDesc,
+    "【旁观者已经选择的感觉线索｜不是事件事实】",
+    observerSignals.length ? observerSignals.join("\n") : "尚未选择",
+    "【上一轮已经用过的情绪词｜避免原样重复】",
+    previousEmotionNames.length ? previousEmotionNames.join("、") : "无",
+    "只能从唯一事实源引用事情经过；其余区块只用于辨认感受，严禁据此创造新剧情。",
+  ].join("\n");
   const apiMessages: ChatMessage[] = [
     { role: "system", content: DIALOGUE_SYSTEM_PROMPT + "\n\n" + roundInstruction },
     { role: "user", content: contextMsg },
-    ...dialogueHistory,
   ];
 
   const first = await callZhipuWithBusyRetry(apiKey, apiMessages, 360);

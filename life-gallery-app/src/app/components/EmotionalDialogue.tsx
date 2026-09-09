@@ -34,6 +34,14 @@ function extractOption(text: string, index: 1 | 2 | 3): string {
   return text.slice(start, end > start ? end : text.length).trim();
 }
 
+function formatChoice(option: string): string {
+  const cleaned = option.replace(/^[①②③]\s*/, "").trim();
+  const separator = cleaned.search(/[：:]/);
+  if (separator < 0) return "我觉得分身更接近「" + cleaned + "」";
+  const name = cleaned.slice(0, separator).trim();
+  const clue = cleaned.slice(separator + 1).trim();
+  return "我觉得分身更接近「" + name + "」：" + clue;
+}
 function narrativePart(text: string): string {
   const firstMarker = text.indexOf("①");
   return firstMarker > 0 ? text.slice(0, firstMarker).trim() : text.trim();
@@ -142,7 +150,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
     const newMessages: Message[] = [
       ...currentMsgs,
       { role: "assistant", content: currentAiText },
-      { role: "user", content: "旁观者补充：" + userMsg },
+      { role: "user", content: userMsg },
     ];
     setMessages(newMessages);
     setCustomText("");
@@ -163,7 +171,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
       finishConfirmation(chosen);
       return;
     }
-    advance("分身的这一段更像是：" + chosen, messages, round);
+    advance(formatChoice(chosen), messages, round);
   };
 
   const handleCustomSubmit = () => {
