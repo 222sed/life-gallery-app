@@ -182,8 +182,24 @@ function errorResponse(respond: (body: unknown, status: number) => Response, err
   return respond({ errorType: "empty_reply", error: "模型返回空内容", finishReason: err.finishReason }, 422);
 }
 
-function formatErrorResponse(respond: (body: unknown, status: number) => Response): Response {
-  return respond({ errorType: "format_error", error: "回复格式不完整，请重新生成" }, 422);
+function safeDialogueReply(emotionLabel: string, round: number): string {
+  const options: Record<string, string[]> = {
+    喜悦: ["满足：我很喜欢此刻的感觉", "轻松：我暂时卸下了心里的负担", "兴奋：这份开心让我很有活力"],
+    平静: ["安定：我的心绪正在慢慢平稳", "释然：我愿意让这份感受过去", "从容：我能不慌不忙地面对此刻"],
+    温暖: ["安心：这份感受让我觉得安稳", "亲近：我感到自己与这份温暖相连", "感动：这份触动仍留在我的心里"],
+    低落: ["失落：我觉得心里空了一小块", "孤单：我感到此刻缺少陪伴", "无力：我很难再提起精神"],
+    愤怒: ["委屈：我觉得自己的感受没有被接住", "不甘：我还不能接受此刻的感受", "恼火：这份情绪仍让我很不舒服"],
+    不安: ["紧张：我的心绪一直难以放松", "担忧：我对接下来的感受不踏实", "忐忑：我在期待与不安之间摇摆"],
+    疲惫: ["耗竭：我像是已经用完了今天的精力", "沉重：这份累让我很难提起精神", "厌倦：我对继续撑着感到抵触"],
+    期待: ["向往：我很想靠近期待中的感受", "雀跃：这份等待让我感到开心", "忐忑：我在期待与不安之间摇摆"],
+  };
+  const choices = options[emotionLabel] ?? ["压抑：我还没能舒展开这份感受", "迷茫：我暂时说不清自己在想什么", "委屈：我希望这份感受能被看见"];
+  const intro = round === 1
+    ? `我想先把这份${emotionLabel}分辨得更清楚一些。`
+    : round === 2
+    ? "沿着刚才的感受，我想再分清它细微的差别。"
+    : "走到这里，我想为这份感受选一个更准确的名字。";
+  return `${intro}\n下面哪一种感觉更接近此刻的我？\n①${choices[0]}\n②${choices[1]}\n③${choices[2]}`;
 }
 
 serve(async (req: Request) => {
@@ -270,6 +286,6 @@ serve(async (req: Request) => {
     : message);
   const retry = await callZhipuWithBusyRetry(apiKey, retryMessages, 360);
   if (!retry.ok) return errorResponse(respond, retry.error);
-  if (!isValidDialogueReply(retry.reply, previousAssistant, description)) return formatErrorResponse(respond);
+  if (!isValidDialogueReply(retry.reply, previousAssistant, description)) return respond({ reply: safeDialogueReply(emotionLabel, round as number) });
   return respond({ reply: retry.reply });
 });
