@@ -26,6 +26,7 @@ const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你
 - 第3轮：把第2轮选中的子感受继续收窄，三个候选必须是彼此相近、侧重点略有不同的最终情绪名称。
 - 每轮只缩小一次范围。不得重新解释原事件，不得推翻或横向扩展上一轮的选择。
 - 情绪名称必须描述“我”的内在状态。禁止用“冷漠、敷衍、疏离、忽视、不尊重、不关心”等评价他人态度的词作为候选。
+- 第2、3轮候选名称不得以“被”开头；要从关系处境落到内在情绪，例如从“被忽视”收窄为“委屈、失落、孤单”。
 - 示例：上一轮选择“被忽视”，下一轮可区分“委屈、失落、孤单”，不可输出“冷漠、敷衍、疏离”。
 
 每次严格输出：
@@ -81,7 +82,7 @@ function dialogueOptionNames(text: string): string[] {
     return separator > 0 ? [option.slice(0, separator).trim()] : [];
   });
 }
-function isValidDialogueReply(text: string, previousAssistant = "", description = ""): boolean {
+function isValidDialogueReply(text: string, previousAssistant = "", description = "", round = 1): boolean {
   if (text.length > 260) return false;
   if (previousAssistant && dialogueLead(text) === dialogueLead(previousAssistant)) return false;
   const markers = ["①", "②", "③"];
@@ -108,6 +109,7 @@ function isValidDialogueReply(text: string, previousAssistant = "", description 
     const judgmentNames = ["冷漠", "敷衍", "疏离", "忽视", "不尊重", "不关心", "漠视"];
     if (!name || !explanation || name.length > 8 || explanation.length > 36) return false;
     if (judgmentNames.some((word) => name.includes(word))) return false;
+    if (round > 1 && name.startsWith("被")) return false;
     names.push(name);
   }
   return new Set(names).size === 3;
@@ -287,13 +289,13 @@ serve(async (req: Request) => {
 
   const first = await callZhipuWithBusyRetry(apiKey, apiMessages, 360);
   if (!first.ok) return errorResponse(respond, first.error);
-  if (isValidDialogueReply(first.reply, previousAssistant, description)) return respond({ reply: first.reply });
+  if (isValidDialogueReply(first.reply, previousAssistant, description, round as number)) return respond({ reply: first.reply });
 
   const retryMessages = apiMessages.map((message, index) => index === 0
     ? { ...message, content: message.content + " 上一版没有满足格式、长度或递进要求。直接沿着本轮唯一父范围向下细分，三个答案都必须是父范围内的内在情绪，不得换方向，不得评价他人；一个共同问题，三个不同且完整的编号候选；不写“解释”，不补充用户没有说过的事实，总字数不超过220字。" }
     : message);
   const retry = await callZhipuWithBusyRetry(apiKey, retryMessages, 360);
   if (!retry.ok) return errorResponse(respond, retry.error);
-  if (!isValidDialogueReply(retry.reply, previousAssistant, description)) return respond({ reply: safeDialogueReply(emotionLabel, round as number) });
+  if (!isValidDialogueReply(retry.reply, previousAssistant, description, round as number)) return respond({ reply: safeDialogueReply(emotionLabel, round as number) });
   return respond({ reply: retry.reply });
 });
