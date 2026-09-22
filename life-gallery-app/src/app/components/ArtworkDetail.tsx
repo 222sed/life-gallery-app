@@ -1,5 +1,6 @@
 import { artworks, styleLabel } from "./mockData";
 import doorThresholdImg from "../../imports/_____20260608023451_3917_642.png";
+import { emotionCtx } from "../store/emotionCtx";
 
 interface Props {
   onBack: () => void;
@@ -8,6 +9,20 @@ interface Props {
 }
 
 export function ArtworkDetail({ onBack, onToLifeGallery, onToSketchRoom }: Props) {
+  const fallback = artworks[0];
+  const artwork = emotionCtx.generatedImageUrl ? {
+    imageUrl: emotionCtx.generatedImageUrl,
+    title: emotionCtx.generatedTitle || emotionCtx.confirmedEmotion || emotionCtx.label,
+    style: emotionCtx.generatedStyle,
+    styleName: emotionCtx.generatedStyleLabel || styleLabel[emotionCtx.generatedStyle],
+    description: emotionCtx.generatedDescription || emotionCtx.confirmedText || emotionCtx.description,
+    emotionTags: Array.from(new Set([emotionCtx.confirmedEmotion, emotionCtx.label].filter(Boolean))).map((tag) => `#${tag}`),
+    date: new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(new Date()),
+  } : {
+    ...fallback,
+    imageUrl: fallback.imageUrl.includes("_____20260608023451_3917_642.png") ? doorThresholdImg : fallback.imageUrl,
+    styleName: styleLabel[fallback.style],
+  };
   return (
     <div className="relative w-full h-full overflow-hidden flex flex-col">
       <div
@@ -62,15 +77,15 @@ export function ArtworkDetail({ onBack, onToLifeGallery, onToSketchRoom }: Props
             {/* Artwork */}
             <div style={{ width: "230px", height: "230px", position: "relative", overflow: "hidden" }}>
               <img
-                src={artworks[0].imageUrl.includes('_____20260608023451_3917_642.png') ? doorThresholdImg : artworks[0].imageUrl}
-                alt={artworks[0].title}
+                src={artwork.imageUrl}
+                alt={artwork.title}
                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
             </div>
             {/* Mat label */}
             <div className="mt-2 text-center">
               <p style={{ fontSize: "10px", color: "rgba(100,70,35,0.4)", fontFamily: "'Noto Serif SC', serif", letterSpacing: "0.1em" }}>
-                {artworks[0].title} · {styleLabel[artworks[0].style]}
+                {artwork.title} · {artwork.styleName}
               </p>
             </div>
           </div>
@@ -88,15 +103,15 @@ export function ArtworkDetail({ onBack, onToLifeGallery, onToSketchRoom }: Props
         >
           <div className="flex items-start justify-between mb-2">
             <h2 className="text-[26px]" style={{ fontFamily: "'Noto Serif SC', serif", fontWeight: 600, color: "rgba(42,28,16,0.9)" }}>
-              {artworks[0].title}
+              {artwork.title}
             </h2>
             <p className="text-[11px] mt-2" style={{ color: "rgba(100,70,35,0.5)", fontFamily: "'Noto Sans SC', sans-serif" }}>
-              {artworks[0].date}
+              {artwork.date}
             </p>
           </div>
 
           <div className="flex flex-wrap gap-2 mb-3">
-            {artworks[0].emotionTags.map((tag) => (
+            {artwork.emotionTags.map((tag) => (
               <span
                 key={tag}
                 className="px-3 py-1 rounded-full text-[11px]"
@@ -113,7 +128,7 @@ export function ArtworkDetail({ onBack, onToLifeGallery, onToSketchRoom }: Props
           </div>
 
           <p className="text-[13px] leading-relaxed" style={{ color: "rgba(80,55,30,0.6)", fontFamily: "'Noto Serif SC', serif", fontWeight: 300 }}>
-            {artworks[0].description}
+            {artwork.description}
           </p>
         </div>
 

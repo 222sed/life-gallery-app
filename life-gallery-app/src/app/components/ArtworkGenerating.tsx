@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { useState } from "react";
+import { motion } from "motion/react";
+import { emotionCtx, setGeneratedArtwork } from "../store/emotionCtx";
 
 interface Props {
   onComplete: () => void;
@@ -37,26 +38,78 @@ const styleProps = [
 ];
 
 const galleryBg = "https://images.unsplash.com/photo-1580136579312-94651dfd596d?w=800&h=1200&fit=crop&auto=format";
+const SUPABASE_URL = "https://ufhirlwxamwffkrwsnmi.supabase.co";
+const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVmaGlybHd4YW13ZmZrcndzbm1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MTcyOTIsImV4cCI6MjEwNDE5MzI5Mn0.5jPikD2ROpxWo-KMSSpFkHQ7241C-Gq1DUh4SrF-xVM";
+
+async function requestArtwork(styleId: string): Promise<Record<string, string>> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 95000);
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/functions/v1/server/generate-artwork`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${ANON_KEY}`,
+        "apikey": ANON_KEY,
+      },
+      body: JSON.stringify({
+        emotionLabel: emotionCtx.label,
+        intensity: emotionCtx.intensity,
+        description: emotionCtx.description,
+        confirmedEmotion: emotionCtx.confirmedEmotion,
+        confirmedText: emotionCtx.confirmedText,
+        styleId,
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new Error(error instanceof DOMException && error.name === "AbortError" ? "绘制时间有点久，请重新试一次" : "网络连接失败，请重试");
+  } finally {
+    window.clearTimeout(timeout);
+  }
+  let data: Record<string, string> = {};
+  try { data = await res.json(); } catch (_) { throw new Error("画廊返回了无法识别的内容"); }
+  if (!res.ok || data.error) {
+    throw new Error(data.errorType === "busy" ? "画师现在有点忙，请稍后再试" : data.error || "生成画作失败，请重试");
+  }
+  if (!data.imageUrl) throw new Error("没有收到画作，请重新生成");
+  return data;
+}
 
 export function ArtworkGenerating({ onComplete }: Props) {
   const [progress, setProgress] = useState(0);
-  const [phase, setPhase] = useState<"choose" | "generating">("choose");
+  const [phase, setPhase] = useState<"choose" | "generating" | "error">("choose");
   const [selectedStyle, setSelectedStyle] = useState(styleProps[0]);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    if (phase !== "generating") return;
-    const interval = setInterval(() => {
-      setProgress((p) => {
-        if (p >= 100) {
-          clearInterval(interval);
-          setTimeout(onComplete, 600);
-          return 100;
-        }
-        return p + Math.random() * 4 + 1;
+  async function generate(style = selectedStyle) {
+    setSelectedStyle(style);
+    setError("");
+    setProgress(4);
+    setPhase("generating");
+    const interval = window.setInterval(() => {
+      setProgress((p) => Math.min(88, p + Math.max(0.8, (90 - p) * 0.035)));
+    }, 450);
+    try {
+      const data = await requestArtwork(style.id);
+      window.clearInterval(interval);
+      setGeneratedArtwork({
+        imageUrl: data.imageUrl,
+        prompt: data.prompt || "",
+        title: data.title || emotionCtx.confirmedEmotion || emotionCtx.label,
+        description: data.description || emotionCtx.confirmedText,
+        style: data.style || style.id,
+        styleLabel: data.styleLabel || style.label,
       });
-    }, 120);
-    return () => clearInterval(interval);
-  }, [phase, onComplete]);
+      setProgress(100);
+      window.setTimeout(onComplete, 550);
+    } catch (reason) {
+      window.clearInterval(interval);
+      setError(reason instanceof Error ? reason.message : "生成画作失败，请重试");
+      setPhase("error");
+    }
+  }
 
   if (phase === "choose") {
     return (
@@ -126,7 +179,7 @@ export function ArtworkGenerating({ onComplete }: Props) {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.34, delay: 0.1 + i * 0.07 }}
-                onClick={() => { setSelectedStyle(s); setPhase("generating"); }}
+                onClick={() => generate(s)}
                 className="flex flex-col items-center justify-center gap-3 py-7 rounded-3xl transition-all duration-200 active:scale-[0.96] relative overflow-hidden"
                 style={{
                   background: "rgba(255,252,245,0.58)",
@@ -309,11 +362,10 @@ export function ArtworkGenerating({ onComplete }: Props) {
             fontFamily: "'Noto Serif SC', serif",
             fontSize: "13px",
             lineHeight: 1.9,
-            color: "rgba(85,62,30,0.55)",
+            color: phase === "error" ? "rgba(166,78,52,0.78)" : "rgba(85,62,30,0.55)",
             fontWeight: 300,
           }}>
-            我要用{selectedStyle.label}来记录今天，<br />
-            因为{selectedStyle.desc}。
+            {phase === "error" ? <>{error}</> : <>我要用{selectedStyle.label}来记录今天，<br />因为{selectedStyle.desc}。</>}
           </p>
         </motion.div>
 
@@ -343,8 +395,26 @@ export function ArtworkGenerating({ onComplete }: Props) {
             marginTop: "8px",
             letterSpacing: "0.04em",
           }}>
-            {progress < 100 ? "正在为你绘制……" : "完成了"}
+            {phase === "error" ? "这次没有画完" : progress < 100 ? "正在理解情绪并绘制……" : "完成了"}
           </p>
+          {phase === "error" && (
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => generate()}
+                className="flex-1 py-3 rounded-2xl active:scale-[0.97]"
+                style={{ background: "rgba(90,53,32,0.9)", color: "#f8ead2", fontSize: "12px" }}
+              >
+                重新绘制
+              </button>
+              <button
+                onClick={() => setPhase("choose")}
+                className="flex-1 py-3 rounded-2xl active:scale-[0.97]"
+                style={{ background: "rgba(255,252,245,0.65)", border: "1px solid rgba(140,108,62,0.18)", color: "rgba(90,60,30,0.7)", fontSize: "12px" }}
+              >
+                换种画法
+              </button>
+            </div>
+          )}
         </motion.div>
       </div>
     </div>

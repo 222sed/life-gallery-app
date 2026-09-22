@@ -7,7 +7,9 @@ const corsHeaders = {
 };
 
 const ZHIPU_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const ZHIPU_IMAGE_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/images/generations";
 const MODEL = "glm-4.7-flashx";
+const IMAGE_MODEL = "cogview-3-flash";
 
 const SYSTEM_PROMPT = "你是情绪记录应用中的倾听者。根据用户选择的情绪、强度和输入内容，只输出一句自然、温和的中文追问，邀请用户继续表达。优先围绕用户提到的具体事情，询问感受或原因；输入含义不清时温和澄清，不擅自解读。不复述强度数值，不给建议，不作诊断，不用固定套话。只问一个问题，尽量控制在20至40个汉字，保证句子完整。";
 
@@ -45,6 +47,10 @@ type ZhipuError =
 
 type ZhipuResult =
   | { ok: true; reply: string; finishReason: string }
+  | { ok: false; error: ZhipuError };
+
+type ImageResult =
+  | { ok: true; imageUrl: string }
   | { ok: false; error: ZhipuError };
 
 function validateMessages(messages: unknown, allowSystem: boolean, allowEmpty = false): string | null {
@@ -177,6 +183,58 @@ async function callZhipuWithBusyRetry(
   return callZhipu(apiKey, messages, maxTokens);
 }
 
+async function callZhipuImage(apiKey: string, prompt: string): Promise<ImageResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 85000);
+  let res: Response;
+  try {
+    res = await fetch(ZHIPU_IMAGE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
+      body: JSON.stringify({ model: IMAGE_MODEL, prompt, size: "864x1152" }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    console.error("[zhipu-image] network error:", String(error));
+    return { ok: false, error: { kind: "network", detail: String(error) } };
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!res.ok) {
+    let detail = "";
+    try { detail = await res.text(); } catch (_) { /* ignore */ }
+    console.error("[zhipu-image] api_error http=" + res.status + " body=" + detail);
+    return { ok: false, error: { kind: "api_error", zhipuStatus: res.status, detail } };
+  }
+
+  let data: Record<string, unknown>;
+  try { data = await res.json(); } catch (_) {
+    return { ok: false, error: { kind: "api_error", zhipuStatus: 502, detail: "invalid JSON response" } };
+  }
+  const images = Array.isArray(data.data) ? data.data : [];
+  const first = images[0] && typeof images[0] === "object" ? images[0] as Record<string, unknown> : {};
+  const imageUrl = typeof first.url === "string" ? first.url : typeof first.file_url === "string" ? first.file_url : "";
+  if (!imageUrl) return { ok: false, error: { kind: "empty_reply", finishReason: "missing_image_url", usage: null } };
+  return { ok: true, imageUrl };
+}
+
+function artworkPlan(raw: string, fallbackPrompt: string, emotion: string): { title: string; description: string; prompt: string } {
+  const match = raw.match(/\{[\s\S]*\}/);
+  try {
+    const value = JSON.parse(match?.[0] ?? "") as Record<string, unknown>;
+    const title = typeof value.title === "string" ? value.title.trim().slice(0, 12) : "";
+    const description = typeof value.description === "string" ? value.description.trim().slice(0, 80) : "";
+    const prompt = typeof value.prompt === "string" ? value.prompt.trim().slice(0, 1400) : "";
+    if (title && description && prompt) return { title, description, prompt };
+  } catch (_) { /* use stable fallback */ }
+  return {
+    title: emotion.slice(0, 8) || "此刻",
+    description: `把此刻的${emotion || "情绪"}留成一幅可以慢慢观看的画。`,
+    prompt: fallbackPrompt,
+  };
+}
+
 function errorResponse(respond: (body: unknown, status: number) => Response, err: ZhipuError): Response {
   if (err.kind === "network") return respond({ errorType: "network", error: "网络连接失败" }, 503);
   if (err.kind === "api_error") {
@@ -219,7 +277,7 @@ serve(async (req: Request) => {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
-  if (req.method !== "POST" || (route !== "ai-chat" && route !== "dialogue")) {
+  if (req.method !== "POST" || !["ai-chat", "dialogue", "generate-artwork"].includes(route)) {
     return respond({ error: "Not found" }, 404);
   }
 
@@ -228,6 +286,44 @@ serve(async (req: Request) => {
 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch (_) { return respond({ error: "Invalid JSON body" }, 400); }
+
+  if (route === "generate-artwork") {
+    const emotionLabel = typeof body.emotionLabel === "string" ? body.emotionLabel.trim().slice(0, 20) : "平静";
+    const confirmedEmotion = typeof body.confirmedEmotion === "string" ? body.confirmedEmotion.trim().slice(0, 60) : emotionLabel;
+    const description = typeof body.description === "string" ? body.description.trim().slice(0, 500) : "";
+    const confirmedText = typeof body.confirmedText === "string" ? body.confirmedText.trim().slice(0, 500) : "";
+    const styleId = typeof body.styleId === "string" ? body.styleId : "watercolor";
+    const styles: Record<string, { label: string; prompt: string }> = {
+      watercolor: { label: "水彩画", prompt: "透明水彩与湿画法，柔和晕染，细腻纸张纹理" },
+      pencil: { label: "铅笔画", prompt: "细腻铅笔素描，克制线条，柔和明暗与纸张纹理" },
+      oil: { label: "油画", prompt: "富有层次的油画笔触，厚薄相间，沉静而有重量" },
+      crayon: { label: "蜡笔画", prompt: "温柔蜡笔质感，朴拙笔触，柔软而真诚的色块" },
+    };
+    const selectedStyle = styles[styleId] ?? styles.watercolor;
+    if (!description && !confirmedText) return respond({ error: "缺少可用于作画的情绪内容" }, 400);
+
+    const fallbackPrompt = `创作一幅竖幅${selectedStyle.label}。以抽象、含蓄的视觉隐喻表达“${confirmedEmotion || emotionLabel}”，${selectedStyle.prompt}。暖棕米色的画廊气质，构图留白，情绪真实克制，有一个清晰视觉焦点。不要出现文字、字幕、水印、标志，也不要画成心理诊断图。`;
+    const planResult = await callZhipuWithBusyRetry(apiKey, [
+      {
+        role: "system",
+        content: "你是情绪艺术策展人。把用户已经确认的情绪转为含蓄、非写实的绘画方案。只返回一个JSON对象，不要Markdown：{\"title\":\"2至8个中文汉字\",\"description\":\"20至55个中文汉字的作品说明\",\"prompt\":\"供图像模型使用的完整中文画面提示词\"}。画面提示词必须写明主体、空间、光线、色彩、构图和指定画材；用象征表达内在情绪，不照搬事件，不出现文字、水印、品牌、UI或心理诊断。",
+      },
+      {
+        role: "user",
+        content: `原始记录：${description || "未填写"}\n确认的情绪：${confirmedEmotion || emotionLabel}\n对话总结：${confirmedText || "未填写"}\n指定画材：${selectedStyle.label}（${selectedStyle.prompt}）`,
+      },
+    ], 500);
+    const plan = artworkPlan(planResult.ok ? planResult.reply : "", fallbackPrompt, confirmedEmotion || emotionLabel);
+    const imageResult = await callZhipuImage(apiKey, plan.prompt);
+    if (!imageResult.ok && imageResult.error.kind === "api_error" && imageResult.error.zhipuStatus === 429) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const retry = await callZhipuImage(apiKey, plan.prompt);
+      if (!retry.ok) return errorResponse(respond, retry.error);
+      return respond({ imageUrl: retry.imageUrl, ...plan, style: styleId, styleLabel: selectedStyle.label });
+    }
+    if (!imageResult.ok) return errorResponse(respond, imageResult.error);
+    return respond({ imageUrl: imageResult.imageUrl, ...plan, style: styleId, styleLabel: selectedStyle.label });
+  }
 
   if (route === "ai-chat") {
     const userMessage = typeof body.userMessage === "string" ? body.userMessage.trim() : "";
