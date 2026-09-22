@@ -50,7 +50,7 @@ async function fetchDialogue(
   description: string
 ): Promise<string> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 45000);
+  const timeout = window.setTimeout(() => controller.abort(), 55000);
   let res: Response;
   try {
     res = await fetch(`${SUPABASE_URL}/functions/v1/server/dialogue`, {
@@ -73,7 +73,7 @@ async function fetchDialogue(
   if (!res.ok || data.error) {
     const msg =
       data.errorType === "network" ? "网络连接失败" :
-      data.errorType === "busy" ? "免费模型当前繁忙，请稍后重试" :
+      data.errorType === "busy" ? "模型请求较多，请稍后重试" :
       data.errorType === "empty_reply" ? "模型返回空内容，请重试" :
       data.errorType === "format_error" ? "回复格式不完整，请重新生成" :
       data.errorType === "api_error" ? "模型服务请求失败" :

@@ -8,7 +8,7 @@ const corsHeaders = {
 
 const ZHIPU_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const ZHIPU_IMAGE_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/images/generations";
-const MODEL = "glm-4.7-flashx";
+const MODEL = "glm-4.5-airx";
 const IMAGE_MODEL = "cogview-3-flash";
 
 const SYSTEM_PROMPT = "你是情绪记录应用中的倾听者。根据用户选择的情绪、强度和输入内容，只输出一句自然、温和的中文追问，邀请用户继续表达。优先围绕用户提到的具体事情，询问感受或原因；输入含义不清时温和澄清，不擅自解读。不复述强度数值，不给建议，不作诊断，不用固定套话。只问一个问题，尽量控制在20至40个汉字，保证句子完整。";
@@ -128,7 +128,7 @@ async function callZhipu(apiKey: string, messages: ChatMessage[], maxTokens: num
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 35000);
+  const timeout = setTimeout(() => controller.abort(), 45000);
   let res: Response;
   try {
     res = await fetch(ZHIPU_ENDPOINT, {
@@ -239,7 +239,7 @@ function errorResponse(respond: (body: unknown, status: number) => Response, err
   if (err.kind === "network") return respond({ errorType: "network", error: "网络连接失败" }, 503);
   if (err.kind === "api_error") {
     if (err.zhipuStatus === 429) {
-      return respond({ errorType: "busy", error: "免费模型当前繁忙，请稍后重试" }, 429);
+      return respond({ errorType: "busy", error: "模型请求较多，请稍后重试" }, 429);
     }
     const httpStatus = err.zhipuStatus >= 400 && err.zhipuStatus < 500 ? err.zhipuStatus : 502;
     return respond({ errorType: "api_error", error: "模型服务请求失败", zhipuStatus: err.zhipuStatus, detail: err.detail }, httpStatus);
