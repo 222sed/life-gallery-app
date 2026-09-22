@@ -70,6 +70,14 @@ const screenDepth: Record<Screen, number> = {
 
 type NavScreen = "life-gallery" | "sketch-room" | "create" | "visitor" | "profile";
 
+const SCREEN_STORAGE_KEY = "life-gallery-current-screen";
+
+function restoreScreen(): Screen {
+  if (typeof window === "undefined") return "splash";
+  const saved = window.sessionStorage.getItem(SCREEN_STORAGE_KEY) as Screen | null;
+  return saved && saved in screenDepth ? saved : "splash";
+}
+
 function toNavActive(screen: Screen): NavScreen | null {
   if (screen === "life-gallery" || screen === "daily-gallery") return "life-gallery";
   if (screen === "sketch-room") return "sketch-room";
@@ -80,8 +88,8 @@ function toNavActive(screen: Screen): NavScreen | null {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>("splash");
-  const prevScreen = useRef<Screen>("splash");
+  const [screen, setScreen] = useState<Screen>(restoreScreen);
+  const prevScreen = useRef<Screen>(screen);
   // Derive galleryType from screen to keep them always in sync
   const galleryType: GalleryType = screen === "daily-gallery" ? "daily" : "main";
   // Track which gallery was active when navigating to artwork-detail
@@ -106,6 +114,7 @@ export default function App() {
       setCurrentArtworkId("h1");
       setCurrentCreatorId("creator1");
     }
+    window.sessionStorage.setItem(SCREEN_STORAGE_KEY, s);
     setScreen(s);
   };
 
