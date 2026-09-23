@@ -85,25 +85,34 @@ function normalizeDialogueText(text: string): string {
   return text.replace(/[\s，。！？、；：,.!?;:“”"'‘’（）()]/g, "");
 }
 
+const EMOTION_SYNONYM_GROUPS = [
+  ["犹豫", "迟疑", "徘徊", "踌躇"],
+  ["焦虑", "焦急", "焦灼", "焦躁"],
+  ["害怕", "恐惧", "惧怕", "惊惧", "畏惧"],
+  ["失落", "低落", "沮丧"],
+  ["愤怒", "生气", "恼怒", "气愤"],
+  ["孤单", "孤独", "寂寞"],
+  ["内疚", "愧疚", "自责"],
+  ["期待", "期盼", "企盼", "盼望", "希冀", "希望", "憧憬", "向往"],
+  ["担忧", "忧虑", "担心", "顾虑"],
+  ["迷茫", "迷惘", "茫然", "困惑"],
+  ["羞耻", "羞愧", "惭愧"],
+  ["安心", "安定", "踏实"],
+  ["无助", "无力", "无奈"],
+  ["烦躁", "烦闷", "心烦"],
+];
+
 function emotionFamily(text: string): string {
   const normalized = normalizeDialogueText(text).replace(/(感|情绪|状态)$/, "");
-  const groups = [
-    ["犹豫", "迟疑", "徘徊", "踌躇"],
-    ["焦虑", "焦急", "焦灼", "焦躁"],
-    ["害怕", "恐惧", "惧怕", "惊惧", "畏惧"],
-    ["失落", "低落", "沮丧"],
-    ["愤怒", "生气", "恼怒", "气愤"],
-    ["孤单", "孤独", "寂寞"],
-    ["内疚", "愧疚", "自责"],
-    ["期待", "期盼", "企盼", "盼望", "希冀", "希望", "憧憬", "向往"],
-    ["担忧", "忧虑", "担心", "顾虑"],
-    ["迷茫", "迷惘", "茫然", "困惑"],
-    ["羞耻", "羞愧", "惭愧"],
-    ["安心", "安定", "踏实"],
-    ["无助", "无力", "无奈"],
-    ["烦躁", "烦闷", "心烦"],
-  ];
-  return groups.find((group) => group.includes(normalized))?.[0] ?? normalized;
+  return EMOTION_SYNONYM_GROUPS.find((group) => group.includes(normalized))?.[0] ?? normalized;
+}
+
+function expandEmotionNames(names: string[]): string[] {
+  const families = new Set(names.map(emotionFamily));
+  const variants = EMOTION_SYNONYM_GROUPS
+    .filter((group) => families.has(group[0]))
+    .flat();
+  return [...new Set([...names, ...variants])];
 }
 
 function dialogueQuestion(text: string): string {
@@ -409,6 +418,7 @@ serve(async (req: Request) => {
     .filter((message) => message.role === "assistant")
     .flatMap((message) => dialogueOptionNames(message.content));
   const forbiddenEmotionNames = [...previousEmotionNames, selectedEmotionName, ...(round === 1 ? [emotionLabel] : [])];
+  const expandedForbiddenEmotionNames = expandEmotionNames(forbiddenEmotionNames);
   const roundInstruction = round === 1
     ? `本次执行第1轮：以“${emotionLabel}”为父范围，辨认三个不同的直接感受方向；候选不得再次使用“${emotionLabel}”。`
     : round === 2
@@ -424,7 +434,7 @@ serve(async (req: Request) => {
     "【本轮必须继续收窄的唯一父范围】",
     selectedScope || (round === 1 ? emotionLabel : "未提供"),
     "【禁止再次出现的情绪词】",
-    forbiddenEmotionNames.length ? forbiddenEmotionNames.join("、") : "无",
+    expandedForbiddenEmotionNames.length ? expandedForbiddenEmotionNames.join("、") : "无",
     "只能从唯一事实源引用事情经过；其余区块只用于辨认感受。候选必须沿唯一父范围向下细分，严禁复用父级或历史词，严禁创造新剧情或评价他人态度。",
   ].join("\n");
   const apiMessages: ChatMessage[] = [
@@ -438,13 +448,21 @@ serve(async (req: Request) => {
   if (isValidDialogueReply(firstReply, previousAssistant, description, round as number, forbiddenEmotionNames)) return respond({ reply: firstReply });
 
   const retryMessages = apiMessages.map((message, index) => index === 0
-    ? { ...message, content: message.content + ` 上一版没有满足格式、长度或递进要求。直接沿着“${selectedEmotionName}”向下细分，三个答案都必须比父范围更具体，并且不得使用这些禁用词：${forbiddenEmotionNames.join("、")}。不要重复上一轮问题；一个共同问题，三个不同且完整的编号候选；不写“解释”，不补充用户没有说过的事实，总字数不超过220字。` }
+    ? { ...message, content: message.content + ` 上一版没有满足格式、长度或递进要求。直接沿着“${selectedEmotionName}”向下细分，三个答案都必须比父范围更具体，并且不得使用这些禁用词及其近义词：${expandedForbiddenEmotionNames.join("、")}。三个候选要分别聚焦不确定、在意程度、自我评价、愿望冲突或需要受阻中的不同方面，不能只列近义词。不要重复上一轮问题；一个共同问题，三个不同且完整的编号候选；不写“解释”，不补充用户没有说过的事实，总字数不超过220字。` }
     : message);
   const retry = await callZhipuWithBusyRetry(apiKey, retryMessages, 360);
   if (!retry.ok) return errorResponse(respond, retry.error);
   const retryReply = composeDialogueReply(retry.reply, round as number, emotionLabel, selectedEmotionName);
-  if (!isValidDialogueReply(retryReply, previousAssistant, description, round as number, forbiddenEmotionNames)) {
+  if (isValidDialogueReply(retryReply, previousAssistant, description, round as number, forbiddenEmotionNames)) return respond({ reply: retryReply });
+
+  const lastChanceMessages = retryMessages.map((message, index) => index === 0
+    ? { ...message, content: message.content + " 这是第二次修正：不要查找父情绪的近义词。三个名称必须表达三种不同的心理焦点，体验线索不得出现身体反应、动作或戏剧性隐喻。" }
+    : message);
+  const lastChance = await callZhipuWithBusyRetry(apiKey, lastChanceMessages, 360);
+  if (!lastChance.ok) return errorResponse(respond, lastChance.error);
+  const lastChanceReply = composeDialogueReply(lastChance.reply, round as number, emotionLabel, selectedEmotionName);
+  if (!isValidDialogueReply(lastChanceReply, previousAssistant, description, round as number, forbiddenEmotionNames)) {
     return respond({ errorType: "format_error", error: "回复没有形成有效递进，请重新生成" }, 422);
   }
-  return respond({ reply: retryReply });
+  return respond({ reply: lastChanceReply });
 });
