@@ -36,11 +36,11 @@ const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你
 - 示例：上一轮选择“被忽视”，下一轮可区分“委屈、失落、孤单”，不可输出“冷漠、敷衍、疏离”。
 
 每次严格输出：
-1. 一句第一人称内在感受，18至42个汉字；不得增加新的事情经过。
-2. 一个可由三个候选共同回答的问题，15至35个汉字；不要使用只有两个答案的“是……还是……”。
-3. 三个候选各占一行，格式为“①情绪名称：第一人称体验线索”。②、③同理。
+ 1. 一句第一人称内在感受，18至42个汉字；不得增加新的事情经过。
+ 2. 一个可由三个候选共同回答的问题，15至35个汉字；不要使用只有两个答案的“是……还是……”。系统会统一改写这两句，你应把主要精力放在三个候选上。
+ 3. 三个候选各占一行，格式为“①情绪名称：第一人称体验线索”。②、③同理。
 
-候选的情绪名称为2至6个汉字；体验线索不超过28个汉字；三项必须是不同的内在体验。整段不超过220个汉字。只描述情绪本身，不写身体隐喻，不推测“害怕失去、失去掌控、想逃离、切断联系”等原因或剧情，除非这些词原本就在用户描述中。问题不得使用“是不是、是否、会不会、为什么”。三轮的问题必须承担不同任务：第1轮找方向，第2轮找这份感受最突出的部分，第3轮给它一个更准确的名字。第2、3轮直接回应刚选中的差异，不重复上一轮的开场、问题和候选，不复述事情经过，不给建议，不作诊断，不说教，不输出标题、分析过程或模板文字。只输出给用户看的正文。`;
+候选的情绪名称为2至6个汉字；体验线索不超过28个汉字；三项必须是不同的内在体验。整段不超过220个汉字。体验线索只能写感受的主观质地，例如“念头难以停下”“没有着落”“想靠近又有顾虑”。禁止悬崖、深渊、判决、审判、坠落等隐喻；禁止身体、心脏、胸口、呼吸等未被用户提及的身体反应；禁止失败、最坏结果、检查遗漏等未被用户提及的剧情。不推测“害怕失去、失去掌控、想逃离、切断联系”等原因，除非这些词原本就在用户描述中。问题不得使用“是不是、是否、会不会、为什么”。三轮的问题必须承担不同任务：第1轮找方向，第2轮找这份感受最突出的部分，第3轮给它一个更准确的名字。第2、3轮直接回应刚选中的差异，不重复上一轮的开场、问题和候选，不复述事情经过，不给建议，不作诊断，不说教，不输出标题、分析过程或模板文字。只输出给用户看的正文。`;
 
 type ChatMessage = { role: "system" | "assistant" | "user"; content: string };
 
@@ -96,6 +96,22 @@ function emotionNameFromChoice(text: string): string {
   return text.replace(/^[①②③]\s*/, "").split(/[：:]/)[0].trim();
 }
 
+function composeDialogueReply(text: string, round: number, emotionLabel: string, parentEmotion: string): string {
+  const firstMarker = text.indexOf("①");
+  const options = firstMarker >= 0 ? text.slice(firstMarker).trim() : text.trim();
+  const reflection = round === 1
+    ? `我知道自己正感到${emotionLabel}，但它里面也许还有更具体的感受。`
+    : round === 2
+    ? `顺着刚才辨认出的“${parentEmotion}”，我想再靠近一点感受它。`
+    : `这份“${parentEmotion}”已经渐渐清楚，我想为它找到最贴近的名字。`;
+  const question = round === 1
+    ? `此刻更接近下面哪一种感受？`
+    : round === 2
+    ? `这份“${parentEmotion}”里，哪一部分最明显？`
+    : `哪个名字最贴近此刻的我？`;
+  return `${reflection}\n${question}\n${options}`;
+}
+
 function dialogueOptionNames(text: string): string[] {
   const markers = ["①", "②", "③"];
   return markers.flatMap((marker, index) => {
@@ -114,7 +130,7 @@ function isValidDialogueReply(
   round = 1,
   forbiddenEmotionNames: string[] = [],
 ): boolean {
-  if (text.length > 260) return false;
+  if (text.length > 360) return false;
   if (previousAssistant && dialogueLead(text) === dialogueLead(previousAssistant)) return false;
   if (previousAssistant && dialogueQuestion(text) === dialogueQuestion(previousAssistant)) return false;
   const markers = ["①", "②", "③"];
@@ -122,14 +138,11 @@ function isValidDialogueReply(
   if (positions.some((position) => position < 0) || positions[0] >= positions[1] || positions[1] >= positions[2]) {
     return false;
   }
-  if (!text.slice(0, positions[0]).includes("？")) return false;
+  if (!/[?？]/.test(text.slice(0, positions[0]))) return false;
   const placeholders = ["情绪词", "一句描述", "待填写", "选项一", "选项二", "选项三", "解释：", "解释:", "这说明"];
   if (placeholders.some((word) => text.includes(word))) return false;
   const bannedQuestions = ["是不是", "是否", "会不会", "为什么", "意味着", "这说明"];
   if (bannedQuestions.some((word) => text.includes(word))) return false;
-  const inferredDetails = ["被迫离开", "切断联系", "未知挑战", "熟悉的圈子", "陌生环境", "胸口", "呼吸", "心跳", "发抖", "灌了铅"];
-  if (inferredDetails.some((word) => text.includes(word) && !description.includes(word))) return false;
-
   const names: string[] = [];
   const forbiddenNames = new Set(forbiddenEmotionNames.map(normalizeDialogueText).filter(Boolean));
   for (let i = 0; i < markers.length; i += 1) {
@@ -140,7 +153,7 @@ function isValidDialogueReply(
     const name = option.slice(0, separator).trim();
     const explanation = option.slice(separator + 1).trim();
     const judgmentNames = ["冷漠", "敷衍", "疏离", "忽视", "不尊重", "不关心", "漠视"];
-    if (!name || !explanation || name.length > 8 || explanation.length > 36) return false;
+    if (!name || !explanation || name.length > 8 || explanation.length > 56) return false;
     if (judgmentNames.some((word) => name.includes(word))) return false;
     if (round > 1 && name.startsWith("被")) return false;
     if (forbiddenNames.has(normalizeDialogueText(name))) return false;
@@ -395,15 +408,17 @@ serve(async (req: Request) => {
 
   const first = await callZhipuWithBusyRetry(apiKey, apiMessages, 360);
   if (!first.ok) return errorResponse(respond, first.error);
-  if (isValidDialogueReply(first.reply, previousAssistant, description, round as number, forbiddenEmotionNames)) return respond({ reply: first.reply });
+  const firstReply = composeDialogueReply(first.reply, round as number, emotionLabel, selectedEmotionName);
+  if (isValidDialogueReply(firstReply, previousAssistant, description, round as number, forbiddenEmotionNames)) return respond({ reply: firstReply });
 
   const retryMessages = apiMessages.map((message, index) => index === 0
     ? { ...message, content: message.content + ` 上一版没有满足格式、长度或递进要求。直接沿着“${selectedEmotionName}”向下细分，三个答案都必须比父范围更具体，并且不得使用这些禁用词：${forbiddenEmotionNames.join("、")}。不要重复上一轮问题；一个共同问题，三个不同且完整的编号候选；不写“解释”，不补充用户没有说过的事实，总字数不超过220字。` }
     : message);
   const retry = await callZhipuWithBusyRetry(apiKey, retryMessages, 360);
   if (!retry.ok) return errorResponse(respond, retry.error);
-  if (!isValidDialogueReply(retry.reply, previousAssistant, description, round as number, forbiddenEmotionNames)) {
+  const retryReply = composeDialogueReply(retry.reply, round as number, emotionLabel, selectedEmotionName);
+  if (!isValidDialogueReply(retryReply, previousAssistant, description, round as number, forbiddenEmotionNames)) {
     return respond({ errorType: "format_error", error: "回复没有形成有效递进，请重新生成" }, 422);
   }
-  return respond({ reply: retry.reply });
+  return respond({ reply: retryReply });
 });
