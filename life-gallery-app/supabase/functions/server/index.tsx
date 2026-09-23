@@ -154,6 +154,51 @@ function dialogueOptionNames(text: string): string[] {
     return separator > 0 ? [option.slice(0, separator).trim()] : [];
   });
 }
+
+function repairDialogueReply(
+  text: string,
+  round: number,
+  emotionLabel: string,
+  parentEmotion: string,
+  forbiddenEmotionNames: string[],
+): string {
+  const markers = ["①", "②", "③"];
+  const parsed = markers.flatMap((marker, index) => {
+    const start = text.indexOf(marker);
+    if (start < 0) return [];
+    const next = index < 2 ? text.indexOf(markers[index + 1], start + 1) : text.length;
+    const option = text.slice(start + 1, next > start ? next : text.length).trim();
+    const separator = option.search(/[：:]/);
+    if (separator <= 0) return [];
+    return [{ name: option.slice(0, separator).trim(), cue: option.slice(separator + 1).trim().split(/\r?\n/)[0] }];
+  });
+  const fallback = [
+    { name: "不确定感", cue: "还找不到可以安心的答案" },
+    { name: "失落", cue: "在意的部分没有得到回应" },
+    { name: "孤单", cue: "和眼前的一切隔着一层" },
+    { name: "无力", cue: "想使上力气却找不到支点" },
+    { name: "委屈", cue: "心里在意的没能被看见" },
+    { name: "紧张", cue: "念头始终无法真正放松" },
+    { name: "矛盾", cue: "两种需要同时拉扯着我" },
+    { name: "受挫", cue: "想要推进的部分遇到阻力" },
+    { name: "自我怀疑", cue: "开始不确定自己是否足够好" },
+    { name: "渴望", cue: "心里仍然有一部分想要靠近" },
+  ];
+  const forbiddenExact = new Set(forbiddenEmotionNames.map(normalizeDialogueText));
+  const forbiddenFamilies = new Set(forbiddenEmotionNames.map(emotionFamily));
+  const chosen: { name: string; cue: string }[] = [];
+  const seenFamilies = new Set<string>();
+  for (const option of [...parsed, ...fallback]) {
+    const normalized = normalizeDialogueText(option.name);
+    const family = emotionFamily(option.name);
+    if (!option.name || !option.cue || forbiddenExact.has(normalized) || forbiddenFamilies.has(family) || seenFamilies.has(family)) continue;
+    chosen.push({ name: option.name.slice(0, 8), cue: option.cue.slice(0, 36) });
+    seenFamilies.add(family);
+    if (chosen.length === 3) break;
+  }
+  const options = chosen.map((option, index) => `${markers[index]}${option.name}：${option.cue}`).join("\n");
+  return composeDialogueReply(options, round, emotionLabel, parentEmotion);
+}
 function isValidDialogueReply(
   text: string,
   previousAssistant = "",
@@ -466,6 +511,10 @@ serve(async (req: Request) => {
   if (!lastChance.ok) return errorResponse(respond, lastChance.error);
   const lastChanceReply = composeDialogueReply(lastChance.reply, round as number, emotionLabel, selectedEmotionName);
   if (!isValidDialogueReply(lastChanceReply, previousAssistant, description, round as number, forbiddenEmotionNames, false)) {
+    const repairedReply = repairDialogueReply(lastChance.reply, round as number, emotionLabel, selectedEmotionName, forbiddenEmotionNames);
+    if (isValidDialogueReply(repairedReply, previousAssistant, description, round as number, forbiddenEmotionNames, false)) {
+      return respond({ reply: repairedReply });
+    }
     return respond({ errorType: "format_error", error: "回复没有形成有效递进，请重新生成" }, 422);
   }
   return respond({ reply: lastChanceReply });
