@@ -160,6 +160,7 @@ function isValidDialogueReply(
   description = "",
   round = 1,
   forbiddenEmotionNames: string[] = [],
+  strictSemantics = true,
 ): boolean {
   if (text.length > 360) return false;
   if (previousAssistant && dialogueLead(text) === dialogueLead(previousAssistant)) return false;
@@ -176,7 +177,8 @@ function isValidDialogueReply(
   if (bannedQuestions.some((word) => text.includes(word))) return false;
   const names: string[] = [];
   const families: string[] = [];
-  const forbiddenNames = new Set(forbiddenEmotionNames.map(emotionFamily).filter(Boolean));
+  const exactForbiddenNames = new Set(forbiddenEmotionNames.map(normalizeDialogueText).filter(Boolean));
+  const forbiddenFamilies = new Set(forbiddenEmotionNames.map(emotionFamily).filter(Boolean));
   const unsupportedCueDetails = ["悬崖", "深渊", "判决", "审判", "坠落", "身体", "心脏", "胸口", "呼吸", "发抖", "脚步", "最坏", "失败", "全力以赴", "白费力气"];
   for (let i = 0; i < markers.length; i += 1) {
     const end = i < 2 ? positions[i + 1] : text.length;
@@ -189,13 +191,14 @@ function isValidDialogueReply(
     if (!name || !explanation || name.length > 8 || explanation.length > 56) return false;
     if (judgmentNames.some((word) => name.includes(word))) return false;
     if (round > 1 && name.startsWith("被")) return false;
-    if (unsupportedCueDetails.some((word) => explanation.includes(word) && !description.includes(word))) return false;
+    if (strictSemantics && unsupportedCueDetails.some((word) => explanation.includes(word) && !description.includes(word))) return false;
     const family = emotionFamily(name);
-    if (forbiddenNames.has(family)) return false;
+    if (exactForbiddenNames.has(normalizeDialogueText(name))) return false;
+    if (strictSemantics && forbiddenFamilies.has(family)) return false;
     names.push(name);
     families.push(family);
   }
-  return new Set(names).size === 3 && new Set(families).size === 3;
+  return new Set(names).size === 3 && (!strictSemantics || new Set(families).size === 3);
 }
 
 async function callZhipu(apiKey: string, messages: ChatMessage[], maxTokens: number): Promise<ZhipuResult> {
@@ -462,7 +465,7 @@ serve(async (req: Request) => {
   const lastChance = await callZhipuWithBusyRetry(apiKey, lastChanceMessages, 360);
   if (!lastChance.ok) return errorResponse(respond, lastChance.error);
   const lastChanceReply = composeDialogueReply(lastChance.reply, round as number, emotionLabel, selectedEmotionName);
-  if (!isValidDialogueReply(lastChanceReply, previousAssistant, description, round as number, forbiddenEmotionNames)) {
+  if (!isValidDialogueReply(lastChanceReply, previousAssistant, description, round as number, forbiddenEmotionNames, false)) {
     return respond({ errorType: "format_error", error: "回复没有形成有效递进，请重新生成" }, 422);
   }
   return respond({ reply: lastChanceReply });
