@@ -87,6 +87,7 @@ function normalizeDialogueText(text: string): string {
 
 const EMOTION_SYNONYM_GROUPS = [
   ["犹豫", "迟疑", "徘徊", "踌躇"],
+  ["忐忑", "惴惴", "惶惑", "惶恐", "惶惶"],
   ["焦虑", "焦急", "焦灼", "焦躁"],
   ["害怕", "恐惧", "惧怕", "惊惧", "畏惧"],
   ["失落", "低落", "沮丧"],
