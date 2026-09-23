@@ -127,7 +127,7 @@ function isValidDialogueReply(
   if (placeholders.some((word) => text.includes(word))) return false;
   const bannedQuestions = ["是不是", "是否", "会不会", "为什么", "意味着", "这说明"];
   if (bannedQuestions.some((word) => text.includes(word))) return false;
-  const inferredDetails = ["害怕", "失去", "掌控", "逃离", "切断", "被迫", "未知挑战", "熟悉的圈子", "陌生环境", "身体", "胸口", "呼吸", "心跳", "发抖", "灌了铅"];
+  const inferredDetails = ["被迫离开", "切断联系", "未知挑战", "熟悉的圈子", "陌生环境", "胸口", "呼吸", "心跳", "发抖", "灌了铅"];
   if (inferredDetails.some((word) => text.includes(word) && !description.includes(word))) return false;
 
   const names: string[] = [];
