@@ -176,7 +176,7 @@ function isValidDialogueReply(
   const names: string[] = [];
   const families: string[] = [];
   const forbiddenNames = new Set(forbiddenEmotionNames.map(emotionFamily).filter(Boolean));
-  const unsupportedCueDetails = ["悬崖", "深渊", "判决", "审判", "坠落", "身体", "心脏", "胸口", "呼吸", "发抖", "脚步"];
+  const unsupportedCueDetails = ["悬崖", "深渊", "判决", "审判", "坠落", "身体", "心脏", "胸口", "呼吸", "发抖", "脚步", "最坏", "失败", "全力以赴", "白费力气"];
   for (let i = 0; i < markers.length; i += 1) {
     const end = i < 2 ? positions[i + 1] : text.length;
     const option = text.slice(positions[i] + 1, end).trim();
@@ -417,7 +417,7 @@ serve(async (req: Request) => {
   const previousEmotionNames = dialogueHistory
     .filter((message) => message.role === "assistant")
     .flatMap((message) => dialogueOptionNames(message.content));
-  const forbiddenEmotionNames = [...previousEmotionNames, selectedEmotionName, ...(round === 1 ? [emotionLabel] : [])];
+  const forbiddenEmotionNames = [...previousEmotionNames, selectedEmotionName, emotionLabel];
   const expandedForbiddenEmotionNames = expandEmotionNames(forbiddenEmotionNames);
   const roundInstruction = round === 1
     ? `本次执行第1轮：以“${emotionLabel}”为父范围，辨认三个不同的直接感受方向；候选不得再次使用“${emotionLabel}”。`

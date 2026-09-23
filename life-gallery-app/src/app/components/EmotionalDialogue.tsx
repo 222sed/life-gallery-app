@@ -49,40 +49,44 @@ async function fetchDialogue(
   intensity: number,
   description: string
 ): Promise<string> {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 55000);
-  let res: Response;
-  try {
-    res = await fetch(`${SUPABASE_URL}/functions/v1/server/dialogue`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${ANON_KEY}`,
-        "apikey": ANON_KEY,
-      },
-      body: JSON.stringify({ messages, round, emotionLabel, intensity, description }),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    throw new Error(error instanceof DOMException && error.name === "AbortError" ? "请求超时，请重试" : "网络连接失败");
-  } finally {
-    window.clearTimeout(timeout);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 55000);
+    let res: Response;
+    try {
+      res = await fetch(`${SUPABASE_URL}/functions/v1/server/dialogue`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${ANON_KEY}`,
+          "apikey": ANON_KEY,
+        },
+        body: JSON.stringify({ messages, round, emotionLabel, intensity, description }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      throw new Error(error instanceof DOMException && error.name === "AbortError" ? "请求超时，请重试" : "网络连接失败");
+    } finally {
+      window.clearTimeout(timeout);
+    }
+    let data: Record<string, unknown> = {};
+    try { data = await res.json(); } catch (_) { throw new Error("网络连接失败"); }
+    if (data.errorType === "format_error" && attempt === 0) continue;
+    if (!res.ok || data.error) {
+      const msg =
+        data.errorType === "network" ? "网络连接失败" :
+        data.errorType === "busy" ? "模型请求较多，请稍后重试" :
+        data.errorType === "empty_reply" ? "模型返回空内容，请重试" :
+        data.errorType === "format_error" ? "回复格式不完整，请重新生成" :
+        data.errorType === "api_error" ? "模型服务请求失败" :
+        String(data.error ?? `请求失败（HTTP ${res.status}）`);
+      throw new Error(msg);
+    }
+    const reply = data.reply as string;
+    if (!reply?.trim()) throw new Error("模型返回空内容，请重试");
+    return reply;
   }
-  let data: Record<string, unknown> = {};
-  try { data = await res.json(); } catch (_) { throw new Error("网络连接失败"); }
-  if (!res.ok || data.error) {
-    const msg =
-      data.errorType === "network" ? "网络连接失败" :
-      data.errorType === "busy" ? "模型请求较多，请稍后重试" :
-      data.errorType === "empty_reply" ? "模型返回空内容，请重试" :
-      data.errorType === "format_error" ? "回复格式不完整，请重新生成" :
-      data.errorType === "api_error" ? "模型服务请求失败" :
-      String(data.error ?? `请求失败（HTTP ${res.status}）`);
-    throw new Error(msg);
-  }
-  const reply = data.reply as string;
-  if (!reply?.trim()) throw new Error("模型返回空内容，请重试");
-  return reply;
+  throw new Error("回复格式不完整，请重新生成");
 }
 
 export function EmotionalDialogue({ onNext, onBack }: Props) {
