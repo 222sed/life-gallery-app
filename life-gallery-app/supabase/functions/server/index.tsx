@@ -27,7 +27,7 @@ const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你
 - 第1轮：把用户预选的情绪当作父范围，区分三个不同的直接感受方向。
 - 第2轮：把旁观者刚选中的感受当作唯一父范围，只给出三个更具体的子感受。
 - 第3轮：把第2轮选中的子感受继续收窄，只给出三个彼此相近、体验焦点不同的最终名称。
-- 子感受必须通过这项检验：“它是父感受的一种更具体体验”。不得用同义改写冒充递进，不得退回父级或横向扩展。
+- 子感受必须通过这项检验：“它是父感受的一种更具体体验”。不得用同义改写冒充递进，例如“犹豫→迟疑／徘徊／踌躇”、“焦虑→焦急／焦灼／焦躁”都是无效的。不得退回父级或横向扩展。
 - 旁观者没有选择的两个候选视为已经排除，后续不得再次出现。
 - 所有历史候选、已经选择的父级名称和初始情绪名称都是禁用词，后续候选不得原样重复。
 - 每轮只缩小一次范围。不得重新解释原事件，不得推翻上一轮的选择。
@@ -40,7 +40,7 @@ const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你
  2. 一个可由三个候选共同回答的问题，15至35个汉字；不要使用只有两个答案的“是……还是……”。系统会统一改写这两句，你应把主要精力放在三个候选上。
  3. 三个候选各占一行，格式为“①情绪名称：第一人称体验线索”。②、③同理。
 
-候选的情绪名称为2至6个汉字；体验线索不超过28个汉字；三项必须是不同的内在体验。整段不超过220个汉字。体验线索只能写感受的主观质地，例如“念头难以停下”“没有着落”“想靠近又有顾虑”。禁止悬崖、深渊、判决、审判、坠落等隐喻；禁止身体、心脏、胸口、呼吸等未被用户提及的身体反应；禁止失败、最坏结果、检查遗漏等未被用户提及的剧情。不推测“害怕失去、失去掌控、想逃离、切断联系”等原因，除非这些词原本就在用户描述中。问题不得使用“是不是、是否、会不会、为什么”。三轮的问题必须承担不同任务：第1轮找方向，第2轮找这份感受最突出的部分，第3轮给它一个更准确的名字。第2、3轮直接回应刚选中的差异，不重复上一轮的开场、问题和候选，不复述事情经过，不给建议，不作诊断，不说教，不输出标题、分析过程或模板文字。只输出给用户看的正文。`;
+候选的情绪名称为2至6个汉字；体验线索不超过28个汉字；三项必须是不同的内在体验。整段不超过220个汉字。三个候选应体现不同的心理焦点，如不确定、在意程度、自我评价、关系需要、愿望冲突或受阻感；只能使用原始描述和已选线索能支持的焦点。体验线索只能写感受的主观质地，例如“念头难以停下”“没有着落”“想靠近又有顾虑”。禁止悬崖、深渊、判决、审判、坠落等隐喻；禁止身体、心脏、胸口、呼吸、脚步等未被用户提及的身体反应或动作；禁止失败、最坏结果、检查遗漏等未被用户提及的剧情。不推测“害怕失去、失去掌控、想逃离、切断联系”等原因，除非这些词原本就在用户描述中。问题不得使用“是不是、是否、会不会、为什么”。三轮的问题必须承担不同任务：第1轮找方向，第2轮找这份感受最突出的部分，第3轮给它一个更准确的名字。第2、3轮直接回应刚选中的差异，不重复上一轮的开场、问题和候选，不复述事情经过，不给建议，不作诊断，不说教，不输出标题、分析过程或模板文字。只输出给用户看的正文。`;
 
 type ChatMessage = { role: "system" | "assistant" | "user"; content: string };
 
@@ -82,7 +82,21 @@ function dialogueLead(text: string): string {
 }
 
 function normalizeDialogueText(text: string): string {
-  return text.replace(/[\s，。！？、；：,.!?;:”“"'‘’（）()]/g, "");
+  return text.replace(/[\s，。！？、；：,.!?;:“”"'‘’（）()]/g, "");
+}
+
+function emotionFamily(text: string): string {
+  const normalized = normalizeDialogueText(text).replace(/(感|情绪|状态)$/, "");
+  const groups = [
+    ["犹豫", "迟疑", "徘徊", "踌躇"],
+    ["焦虑", "焦急", "焦灼", "焦躁"],
+    ["害怕", "恐惧", "惧怕", "惊惧", "畏惧"],
+    ["失落", "低落", "沮丧"],
+    ["愤怒", "生气", "恼怒", "气愤"],
+    ["孤单", "孤独", "寂寞"],
+    ["内疚", "愧疚", "自责"],
+  ];
+  return groups.find((group) => group.includes(normalized))?.[0] ?? normalized;
 }
 
 function dialogueQuestion(text: string): string {
@@ -144,7 +158,9 @@ function isValidDialogueReply(
   const bannedQuestions = ["是不是", "是否", "会不会", "为什么", "意味着", "这说明"];
   if (bannedQuestions.some((word) => text.includes(word))) return false;
   const names: string[] = [];
-  const forbiddenNames = new Set(forbiddenEmotionNames.map(normalizeDialogueText).filter(Boolean));
+  const families: string[] = [];
+  const forbiddenNames = new Set(forbiddenEmotionNames.map(emotionFamily).filter(Boolean));
+  const unsupportedCueDetails = ["悬崖", "深渊", "判决", "审判", "坠落", "身体", "心脏", "胸口", "呼吸", "发抖", "脚步"];
   for (let i = 0; i < markers.length; i += 1) {
     const end = i < 2 ? positions[i + 1] : text.length;
     const option = text.slice(positions[i] + 1, end).trim();
@@ -156,10 +172,13 @@ function isValidDialogueReply(
     if (!name || !explanation || name.length > 8 || explanation.length > 56) return false;
     if (judgmentNames.some((word) => name.includes(word))) return false;
     if (round > 1 && name.startsWith("被")) return false;
-    if (forbiddenNames.has(normalizeDialogueText(name))) return false;
+    if (unsupportedCueDetails.some((word) => explanation.includes(word) && !description.includes(word))) return false;
+    const family = emotionFamily(name);
+    if (forbiddenNames.has(family)) return false;
     names.push(name);
+    families.push(family);
   }
-  return new Set(names).size === 3;
+  return new Set(names).size === 3 && new Set(families).size === 3;
 }
 
 async function callZhipu(apiKey: string, messages: ChatMessage[], maxTokens: number): Promise<ZhipuResult> {
@@ -398,7 +417,7 @@ serve(async (req: Request) => {
     "【本轮必须继续收窄的唯一父范围】",
     selectedScope || (round === 1 ? emotionLabel : "未提供"),
     "【禁止再次出现的情绪词】",
-    previousEmotionNames.length ? previousEmotionNames.join("、") : "无",
+    forbiddenEmotionNames.length ? forbiddenEmotionNames.join("、") : "无",
     "只能从唯一事实源引用事情经过；其余区块只用于辨认感受。候选必须沿唯一父范围向下细分，严禁复用父级或历史词，严禁创造新剧情或评价他人态度。",
   ].join("\n");
   const apiMessages: ChatMessage[] = [
