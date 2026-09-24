@@ -154,6 +154,20 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
     }, 80);
   };
 
+  useEffect(() => {
+    const settleScroll = () => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    };
+    const frame = requestAnimationFrame(settleScroll);
+    const timer = window.setTimeout(settleScroll, 460);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [phase, messages.length, currentAiText, definition?.emotion, artworkPlan?.prompt]);
+
   const loadAi = useCallback(async (msgs: Message[], r: number) => {
     if (isLoadingRef.current) return;
     isLoadingRef.current = true;
@@ -393,7 +407,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
         {/* Scrollable chat */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto px-5 pb-4 flex flex-col gap-4"
+          className="flex-1 overflow-y-auto px-5 pb-6 flex flex-col gap-4"
           style={{ scrollbarWidth: "none" }}
         >
           {/* Historical exchange pairs */}
