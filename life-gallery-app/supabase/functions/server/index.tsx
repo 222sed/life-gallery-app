@@ -515,6 +515,10 @@ serve(async (req: Request) => {
     if (isValidDialogueReply(repairedReply, previousAssistant, description, round as number, forbiddenEmotionNames, false)) {
       return respond({ reply: repairedReply });
     }
+    const fallbackReply = repairDialogueReply("", round as number, emotionLabel, selectedEmotionName, forbiddenEmotionNames);
+    if (isValidDialogueReply(fallbackReply, previousAssistant, description, round as number, forbiddenEmotionNames, false)) {
+      return respond({ reply: fallbackReply });
+    }
     return respond({ errorType: "format_error", error: "回复没有形成有效递进，请重新生成" }, 422);
   }
   return respond({ reply: lastChanceReply });
