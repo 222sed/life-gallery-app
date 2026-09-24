@@ -42,6 +42,15 @@ const DIALOGUE_SYSTEM_PROMPT = `你是“人生画廊”中的虚拟分身。你
 
 候选的情绪名称为2至6个汉字；体验线索不超过28个汉字；三项必须是不同的内在体验。整段不超过220个汉字。三个候选应体现不同的心理焦点，如不确定、在意程度、自我评价、关系需要、愿望冲突或受阻感；只能使用原始描述和已选线索能支持的焦点。体验线索只能写感受的主观质地，例如“念头难以停下”“没有着落”“想靠近又有顾虑”。禁止悬崖、深渊、判决、审判、坠落等隐喻；禁止身体、心脏、胸口、呼吸、脚步等未被用户提及的身体反应或动作；禁止失败、最坏结果、检查遗漏等未被用户提及的剧情。不推测“害怕失去、失去掌控、想逃离、切断联系”等原因，除非这些词原本就在用户描述中。问题不得使用“是不是、是否、会不会、为什么”。三轮的问题必须承担不同任务：第1轮找方向，第2轮找这份感受最突出的部分，第3轮给它一个更准确的名字。第2、3轮直接回应刚选中的差异，不重复上一轮的开场、问题和候选，不复述事情经过，不给建议，不作诊断，不说教，不输出标题、分析过程或模板文字。只输出给用户看的正文。`;
 
+const EMOTION_DEFINITION_PROMPT = `你是“人生画廊”的情绪命名者。根据用户原始记录和三轮选择，给此刻的情绪一个准确、克制、可理解的定义。定义需要指出情绪的核心感受，以及它在保护的在意或需要；只能依据对话，不新增事件，不评价他人，不给建议，不作心理诊断。若有被用户否定的旧定义，新定义必须更换心理焦点，而不是改写同一句话。只返回JSON，不要Markdown：{"emotion":"2至10个中文汉字","definition":"35至80个中文汉字的一段定义"}。`;
+
+const ART_STYLES: Record<string, { label: string; prompt: string }> = {
+  watercolor: { label: "水彩画", prompt: "透明水彩与湿画法，柔和晕染，细腻纸张纹理" },
+  pencil: { label: "铅笔画", prompt: "细腻铅笔素描，克制线条，柔和明暗与纸张纹理" },
+  oil: { label: "油画", prompt: "富有层次的油画笔触，厚薄相间，沉静而有重量" },
+  crayon: { label: "蜡笔画", prompt: "温柔蜡笔质感，朴拙笔触，柔软而真诚的色块" },
+};
+
 type ChatMessage = { role: "system" | "assistant" | "user"; content: string };
 
 type ZhipuError =
@@ -360,6 +369,47 @@ function artworkPlan(raw: string, fallbackPrompt: string, emotion: string): { ti
   };
 }
 
+function emotionDefinition(raw: string, fallbackEmotion: string): { emotion: string; definition: string } {
+  const match = raw.match(/\{[\s\S]*\}/);
+  try {
+    const value = JSON.parse(match?.[0] ?? "") as Record<string, unknown>;
+    const emotion = typeof value.emotion === "string" ? value.emotion.trim().slice(0, 10) : "";
+    const definition = typeof value.definition === "string" ? value.definition.trim().slice(0, 100) : "";
+    if (emotion && definition) return { emotion, definition };
+  } catch (_) { /* use stable fallback */ }
+  return {
+    emotion: fallbackEmotion.slice(0, 10) || "还在辨认",
+    definition: `“${fallbackEmotion || "这份感受"}”是此刻最清楚的线索，它收住了几轮对话里反复靠近的部分，也允许暂时说不清的感受继续存在。`,
+  };
+}
+
+async function createArtworkPlan(
+  apiKey: string,
+  input: {
+    emotionLabel: string;
+    confirmedEmotion: string;
+    description: string;
+    confirmedText: string;
+    styleId: string;
+    transcript?: string;
+  },
+): Promise<{ title: string; description: string; prompt: string; style: string; styleLabel: string }> {
+  const selectedStyle = ART_STYLES[input.styleId] ?? ART_STYLES.watercolor;
+  const fallbackPrompt = `创作一幅竖幅${selectedStyle.label}。以抽象、含蓄的视觉隐喻表达“${input.confirmedEmotion || input.emotionLabel}”，${selectedStyle.prompt}。暖棕米色的画廊气质，构图留白，情绪真实克制，有一个清晰视觉焦点。不要出现文字、字幕、水印、标志，也不要画成心理诊断图。`;
+  const result = await callZhipuWithBusyRetry(apiKey, [
+    {
+      role: "system",
+      content: "你是情绪艺术策展人。把用户已经确认的情绪转为含蓄、非写实的绘画方案。只返回一个JSON对象，不要Markdown：{\"title\":\"2至8个中文汉字\",\"description\":\"20至55个中文汉字的作品说明\",\"prompt\":\"供图像模型使用的完整中文画面提示词\"}。画面提示词必须写明主体、空间、光线、色彩、构图和指定画材；用象征表达内在情绪，不照搬事件，不出现文字、水印、品牌、UI或心理诊断。",
+    },
+    {
+      role: "user",
+      content: `原始记录：${input.description || "未填写"}\n确认的情绪：${input.confirmedEmotion || input.emotionLabel}\n情绪定义：${input.confirmedText || "未填写"}\n三轮对话：${input.transcript || "未提供"}\n指定画材：${selectedStyle.label}（${selectedStyle.prompt}）`,
+    },
+  ], 500);
+  const plan = artworkPlan(result.ok ? result.reply : "", fallbackPrompt, input.confirmedEmotion || input.emotionLabel);
+  return { ...plan, style: input.styleId, styleLabel: selectedStyle.label };
+}
+
 function errorResponse(respond: (body: unknown, status: number) => Response, err: ZhipuError): Response {
   if (err.kind === "network") return respond({ errorType: "network", error: "网络连接失败" }, 503);
   if (err.kind === "api_error") {
@@ -382,7 +432,7 @@ serve(async (req: Request) => {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
-  if (req.method !== "POST" || !["ai-chat", "dialogue", "generate-artwork"].includes(route)) {
+  if (req.method !== "POST" || !["ai-chat", "dialogue", "emotion-definition", "artwork-plan", "generate-artwork"].includes(route)) {
     return respond({ error: "Not found" }, 404);
   }
 
@@ -392,33 +442,65 @@ serve(async (req: Request) => {
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch (_) { return respond({ error: "Invalid JSON body" }, 400); }
 
+  if (route === "emotion-definition") {
+    const messageError = validateMessages(body.messages, false);
+    if (messageError) return respond({ error: messageError }, 400);
+    const messages = body.messages as ChatMessage[];
+    const description = typeof body.description === "string" ? body.description.trim().slice(0, 500) : "";
+    const emotionLabel = typeof body.emotionLabel === "string" ? body.emotionLabel.trim().slice(0, 20) : "平静";
+    const rejected = Array.isArray(body.rejectedDefinitions)
+      ? body.rejectedDefinitions.filter((item): item is string => typeof item === "string").slice(-6).map((item) => item.slice(0, 120))
+      : [];
+    const finalChoice = [...messages].reverse().find((message) => message.role === "user")?.content ?? emotionLabel;
+    const fallbackEmotion = emotionNameFromChoice(finalChoice) || emotionLabel;
+    const result = await callZhipuWithBusyRetry(apiKey, [
+      { role: "system", content: EMOTION_DEFINITION_PROMPT },
+      {
+        role: "user",
+        content: `原始记录：${description || "未填写"}\n初始情绪：${emotionLabel}\n三轮对话：\n${messages.map((message) => `${message.role === "assistant" ? "分身" : "旁观者"}：${message.content}`).join("\n")}\n已经否定的定义：${rejected.length ? rejected.join("｜") : "无"}`,
+      },
+    ], 360);
+    if (!result.ok) return errorResponse(respond, result.error);
+    return respond(emotionDefinition(result.reply, fallbackEmotion));
+  }
+
+  if (route === "artwork-plan") {
+    const emotionLabel = typeof body.emotionLabel === "string" ? body.emotionLabel.trim().slice(0, 20) : "平静";
+    const confirmedEmotion = typeof body.confirmedEmotion === "string" ? body.confirmedEmotion.trim().slice(0, 60) : emotionLabel;
+    const description = typeof body.description === "string" ? body.description.trim().slice(0, 500) : "";
+    const confirmedText = typeof body.confirmedText === "string" ? body.confirmedText.trim().slice(0, 500) : "";
+    const styleId = typeof body.styleId === "string" ? body.styleId : "watercolor";
+    const messages = Array.isArray(body.messages) ? body.messages as ChatMessage[] : [];
+    if (!description && !confirmedText) return respond({ error: "缺少可用于作画的情绪内容" }, 400);
+    const plan = await createArtworkPlan(apiKey, {
+      emotionLabel,
+      confirmedEmotion,
+      description,
+      confirmedText,
+      styleId,
+      transcript: messages.slice(-6).map((message) => `${message.role === "assistant" ? "分身" : "旁观者"}：${message.content}`).join("\n"),
+    });
+    return respond(plan);
+  }
+
   if (route === "generate-artwork") {
     const emotionLabel = typeof body.emotionLabel === "string" ? body.emotionLabel.trim().slice(0, 20) : "平静";
     const confirmedEmotion = typeof body.confirmedEmotion === "string" ? body.confirmedEmotion.trim().slice(0, 60) : emotionLabel;
     const description = typeof body.description === "string" ? body.description.trim().slice(0, 500) : "";
     const confirmedText = typeof body.confirmedText === "string" ? body.confirmedText.trim().slice(0, 500) : "";
     const styleId = typeof body.styleId === "string" ? body.styleId : "watercolor";
-    const styles: Record<string, { label: string; prompt: string }> = {
-      watercolor: { label: "水彩画", prompt: "透明水彩与湿画法，柔和晕染，细腻纸张纹理" },
-      pencil: { label: "铅笔画", prompt: "细腻铅笔素描，克制线条，柔和明暗与纸张纹理" },
-      oil: { label: "油画", prompt: "富有层次的油画笔触，厚薄相间，沉静而有重量" },
-      crayon: { label: "蜡笔画", prompt: "温柔蜡笔质感，朴拙笔触，柔软而真诚的色块" },
-    };
-    const selectedStyle = styles[styleId] ?? styles.watercolor;
-    if (!description && !confirmedText) return respond({ error: "缺少可用于作画的情绪内容" }, 400);
-
-    const fallbackPrompt = `创作一幅竖幅${selectedStyle.label}。以抽象、含蓄的视觉隐喻表达“${confirmedEmotion || emotionLabel}”，${selectedStyle.prompt}。暖棕米色的画廊气质，构图留白，情绪真实克制，有一个清晰视觉焦点。不要出现文字、字幕、水印、标志，也不要画成心理诊断图。`;
-    const planResult = await callZhipuWithBusyRetry(apiKey, [
-      {
-        role: "system",
-        content: "你是情绪艺术策展人。把用户已经确认的情绪转为含蓄、非写实的绘画方案。只返回一个JSON对象，不要Markdown：{\"title\":\"2至8个中文汉字\",\"description\":\"20至55个中文汉字的作品说明\",\"prompt\":\"供图像模型使用的完整中文画面提示词\"}。画面提示词必须写明主体、空间、光线、色彩、构图和指定画材；用象征表达内在情绪，不照搬事件，不出现文字、水印、品牌、UI或心理诊断。",
-      },
-      {
-        role: "user",
-        content: `原始记录：${description || "未填写"}\n确认的情绪：${confirmedEmotion || emotionLabel}\n对话总结：${confirmedText || "未填写"}\n指定画材：${selectedStyle.label}（${selectedStyle.prompt}）`,
-      },
-    ], 500);
-    const plan = artworkPlan(planResult.ok ? planResult.reply : "", fallbackPrompt, confirmedEmotion || emotionLabel);
+    const selectedStyle = ART_STYLES[styleId] ?? ART_STYLES.watercolor;
+    const preparedPrompt = typeof body.prompt === "string" ? body.prompt.trim().slice(0, 1400) : "";
+    if (!description && !confirmedText && !preparedPrompt) return respond({ error: "缺少可用于作画的情绪内容" }, 400);
+    const plan = preparedPrompt
+      ? {
+          prompt: preparedPrompt,
+          title: typeof body.title === "string" ? body.title.trim().slice(0, 12) || confirmedEmotion : confirmedEmotion,
+          description: typeof body.artworkDescription === "string" ? body.artworkDescription.trim().slice(0, 80) || confirmedText : confirmedText,
+          style: styleId,
+          styleLabel: selectedStyle.label,
+        }
+      : await createArtworkPlan(apiKey, { emotionLabel, confirmedEmotion, description, confirmedText, styleId });
     const imageResult = await callZhipuImage(apiKey, plan.prompt);
     if (!imageResult.ok && imageResult.error.kind === "api_error" && imageResult.error.zhipuStatus === 429) {
       await new Promise((resolve) => setTimeout(resolve, 1500));

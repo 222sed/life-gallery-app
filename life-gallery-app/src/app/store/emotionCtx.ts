@@ -57,6 +57,21 @@ export function setConfirmedEmotion(emotion: string, text: string) {
   persistEmotionCtx();
 }
 
+export function setArtworkPlan(plan: {
+  prompt: string;
+  title: string;
+  description: string;
+  style?: string;
+  styleLabel?: string;
+}) {
+  emotionCtx.generatedPrompt = plan.prompt;
+  emotionCtx.generatedTitle = plan.title;
+  emotionCtx.generatedDescription = plan.description;
+  emotionCtx.generatedStyle = plan.style || "watercolor";
+  emotionCtx.generatedStyleLabel = plan.styleLabel || "水彩画";
+  persistEmotionCtx();
+}
+
 export function setGeneratedArtwork(artwork: {
   imageUrl: string;
   prompt: string;

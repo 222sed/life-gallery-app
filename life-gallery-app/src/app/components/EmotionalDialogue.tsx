@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { emotionCtx, setConfirmedEmotion } from "../store/emotionCtx";
+import { emotionCtx, setArtworkPlan, setConfirmedEmotion } from "../store/emotionCtx";
 
 interface Props {
   onNext: () => void;
@@ -12,7 +12,21 @@ interface Message {
   content: string;
 }
 
-type Phase = "loading" | "choosing" | "custom-input" | "error";
+interface EmotionDefinition {
+  emotion: string;
+  definition: string;
+}
+
+interface ArtworkPlan {
+  title: string;
+  description: string;
+  prompt: string;
+  style: string;
+  styleLabel: string;
+}
+
+type Phase = "loading" | "choosing" | "custom-input" | "defining" | "definition" | "prompt-loading" | "prompt-review" | "prompt-editing" | "error";
+type ErrorStage = "dialogue" | "definition" | "plan";
 
 const SUPABASE_URL = "https://ufhirlwxamwffkrwsnmi.supabase.co";
 const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVmaGlybHd4YW13ZmZrcndzbm1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MTcyOTIsImV4cCI6MjEwNDE5MzI5Mn0.5jPikD2ROpxWo-KMSSpFkHQ7241C-Gq1DUh4SrF-xVM";
@@ -89,6 +103,34 @@ async function fetchDialogue(
   throw new Error("回复格式不完整，请重新生成");
 }
 
+async function postJson(route: string, payload: Record<string, unknown>, timeoutMs = 55000): Promise<Record<string, string>> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/functions/v1/server/${route}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${ANON_KEY}`,
+        "apikey": ANON_KEY,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new Error(error instanceof DOMException && error.name === "AbortError" ? "请求超时，请重试" : "网络连接失败");
+  } finally {
+    window.clearTimeout(timeout);
+  }
+  let data: Record<string, string> = {};
+  try { data = await res.json(); } catch (_) { throw new Error("画廊返回了无法识别的内容"); }
+  if (!res.ok || data.error) {
+    throw new Error(data.errorType === "busy" ? "模型请求较多，请稍后重试" : data.error || "模型服务请求失败");
+  }
+  return data;
+}
+
 export function EmotionalDialogue({ onNext, onBack }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentAiText, setCurrentAiText] = useState("");
@@ -96,6 +138,11 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
   const [round, setRound] = useState(1);
   const [customText, setCustomText] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [errorStage, setErrorStage] = useState<ErrorStage>("dialogue");
+  const [definition, setDefinition] = useState<EmotionDefinition | null>(null);
+  const [rejectedDefinitions, setRejectedDefinitions] = useState<string[]>([]);
+  const [artworkPlan, setLocalArtworkPlan] = useState<ArtworkPlan | null>(null);
+  const [draftPrompt, setDraftPrompt] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const isLoadingRef = useRef(false);
 
@@ -125,6 +172,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
       scrollToBottom();
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : "网络请求失败");
+      setErrorStage("dialogue");
       setPhase("error");
     } finally {
       isLoadingRef.current = false;
@@ -133,16 +181,76 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
 
   useEffect(() => { loadAi([], 1); }, []);
 
-  const finishConfirmation = (text: string) => {
-    const confirmedText = text.trim();
-    const confirmedEmotion = confirmedText.replace(/^[①②③]\s*/, "").split(/[：:]/)[0].trim();
-    setConfirmedEmotion(confirmedEmotion || "自定义", confirmedText);
-    setMessages((current) => [
-      ...current,
+  const loadDefinition = async (dialogueMessages: Message[], rejected: string[]) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+    setPhase("defining");
+    setErrorMsg("");
+    try {
+      const data = await postJson("emotion-definition", {
+        messages: dialogueMessages,
+        emotionLabel: emotionCtx.label,
+        description: emotionCtx.description,
+        rejectedDefinitions: rejected,
+      });
+      if (!data.emotion?.trim() || !data.definition?.trim()) throw new Error("情绪定义不完整，请重试");
+      setDefinition({ emotion: data.emotion.trim(), definition: data.definition.trim() });
+      setPhase("definition");
+      scrollToBottom();
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : "情绪定义失败");
+      setErrorStage("definition");
+      setPhase("error");
+    } finally {
+      isLoadingRef.current = false;
+    }
+  };
+
+  const loadArtworkPlan = async (dialogueMessages: Message[], accepted: EmotionDefinition) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+    setPhase("prompt-loading");
+    setErrorMsg("");
+    try {
+      const data = await postJson("artwork-plan", {
+        messages: dialogueMessages,
+        emotionLabel: emotionCtx.label,
+        description: emotionCtx.description,
+        confirmedEmotion: accepted.emotion,
+        confirmedText: accepted.definition,
+        styleId: "watercolor",
+      });
+      if (!data.prompt?.trim()) throw new Error("画面描述不完整，请重试");
+      const nextPlan = {
+        title: data.title || accepted.emotion,
+        description: data.description || accepted.definition,
+        prompt: data.prompt.trim(),
+        style: data.style || "watercolor",
+        styleLabel: data.styleLabel || "水彩画",
+      };
+      setLocalArtworkPlan(nextPlan);
+      setDraftPrompt(nextPlan.prompt);
+      setPhase("prompt-review");
+      scrollToBottom();
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : "画面构思失败");
+      setErrorStage("plan");
+      setPhase("error");
+    } finally {
+      isLoadingRef.current = false;
+    }
+  };
+
+  const finishDialogue = (text: string) => {
+    const finalChoice = text.trim();
+    const finalMessages: Message[] = [
+      ...messages,
       { role: "assistant", content: currentAiText },
-      { role: "user", content: confirmedText },
-    ]);
-    setTimeout(onNext, 320);
+      { role: "user", content: finalChoice },
+    ];
+    setMessages(finalMessages);
+    setCustomText("");
+    loadDefinition(finalMessages, rejectedDefinitions);
   };
 
   const advance = (userMsg: string, currentMsgs: Message[], currentRound: number) => {
@@ -155,7 +263,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
     setCustomText("");
 
     if (currentRound >= MAX_ROUNDS) {
-      finishConfirmation(userMsg);
+      finishDialogue(userMsg);
       return;
     }
     const next = currentRound + 1;
@@ -167,7 +275,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
     if (phase !== "choosing") return;
     const chosen = extractOption(currentAiText, index);
     if (round >= CONFIRM_ROUND) {
-      finishConfirmation(chosen);
+      finishDialogue(formatChoice(chosen));
       return;
     }
     advance(formatChoice(chosen), messages, round);
@@ -176,12 +284,35 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
   const handleCustomSubmit = () => {
     if (!customText.trim() || isLoadingRef.current) return;
     if (round >= CONFIRM_ROUND) {
-      finishConfirmation(customText);
+      finishDialogue(customText);
       return;
     }
     advance(customText.trim(), messages, round);
   };
-  const handleRetry = () => { loadAi(messages, round); };
+  const handleDefinitionReject = () => {
+    if (!definition) return;
+    const rejected = [...rejectedDefinitions, `${definition.emotion}：${definition.definition}`];
+    setRejectedDefinitions(rejected);
+    loadDefinition(messages, rejected);
+  };
+
+  const handleDefinitionAccept = () => {
+    if (!definition) return;
+    setConfirmedEmotion(definition.emotion, definition.definition);
+    loadArtworkPlan(messages, definition);
+  };
+
+  const handleArtworkConfirm = () => {
+    if (!artworkPlan || !draftPrompt.trim()) return;
+    setArtworkPlan({ ...artworkPlan, prompt: draftPrompt.trim() });
+    onNext();
+  };
+
+  const handleRetry = () => {
+    if (errorStage === "definition") loadDefinition(messages, rejectedDefinitions);
+    else if (errorStage === "plan" && definition) loadArtworkPlan(messages, definition);
+    else loadAi(messages, round);
+  };
 
   const pillCount = Math.min(round, 3);
   const showButtons = (phase === "choosing" || phase === "custom-input") && hasAllOptions(currentAiText);
@@ -281,9 +412,9 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
 
           {/* Current AI turn */}
           <AnimatePresence mode="wait">
-            {phase === "loading" && (
+            {(phase === "loading" || phase === "defining" || phase === "prompt-loading") && (
               <motion.div
-                key="loading"
+                key={phase}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0 }}
@@ -310,6 +441,17 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
                       />
                     ))}
                   </div>
+                  {phase !== "loading" && (
+                    <p style={{
+                      fontFamily: "'Noto Sans SC', sans-serif",
+                      fontSize: "11px",
+                      color: "rgba(112,84,48,0.58)",
+                      marginTop: "9px",
+                      letterSpacing: "0.03em",
+                    }}>
+                      {phase === "defining" ? "正在为这份感受找到名字…" : "正在把情绪转成画面…"}
+                    </p>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -346,6 +488,107 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
                   }}>
                     {currentAiText}
                   </p>
+                </div>
+              </motion.div>
+            )}
+
+            {phase === "definition" && definition && (
+              <motion.div
+                key={`definition-${rejectedDefinitions.length}`}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.38 }}
+                className="flex items-start gap-2.5"
+              >
+                <AiAvatar />
+                <div
+                  className="rounded-2xl rounded-tl-md px-4 py-4 relative overflow-hidden"
+                  style={{
+                    background: "rgba(255,252,245,0.78)",
+                    backdropFilter: "blur(24px) saturate(1.2)", WebkitBackdropFilter: "blur(24px) saturate(1.2)",
+                    border: "1.5px solid rgba(255,255,255,0.9)",
+                    boxShadow: "0 8px 28px rgba(88,64,32,0.09)",
+                    maxWidth: "calc(100% - 36px)",
+                  }}
+                >
+                  <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "12px", color: "rgba(92,68,38,0.58)", marginBottom: "10px" }}>
+                    我试着为此刻的你命名
+                  </p>
+                  <p style={{ fontFamily: "'Noto Serif SC', serif", fontSize: "20px", color: "rgba(68,45,18,0.92)", marginBottom: "10px", letterSpacing: "0.04em" }}>
+                    「{definition.emotion}」
+                  </p>
+                  <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "13px", lineHeight: 1.85, color: "rgba(55,40,18,0.8)", whiteSpace: "pre-wrap" }}>
+                    {definition.definition}
+                  </p>
+                  <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "12px", color: "rgba(110,82,48,0.62)", marginTop: "13px" }}>
+                    这个定义接近你此刻的感受吗？
+                  </p>
+                </div>
+              </motion.div>
+            )}
+
+            {(phase === "prompt-review" || phase === "prompt-editing") && artworkPlan && (
+              <motion.div
+                key="prompt-review"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.38 }}
+                className="flex items-start gap-2.5"
+              >
+                <AiAvatar />
+                <div
+                  className="rounded-2xl rounded-tl-md px-4 py-4 relative"
+                  style={{
+                    background: "rgba(255,252,245,0.8)",
+                    backdropFilter: "blur(24px) saturate(1.2)", WebkitBackdropFilter: "blur(24px) saturate(1.2)",
+                    border: "1.5px solid rgba(255,255,255,0.9)",
+                    boxShadow: "0 8px 28px rgba(88,64,32,0.09)",
+                    width: "calc(100% - 36px)",
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div>
+                      <p style={{ fontFamily: "'Noto Serif SC', serif", fontSize: "16px", color: "rgba(68,45,18,0.9)", marginBottom: "3px" }}>我会这样画下它</p>
+                      <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "10.5px", color: "rgba(118,88,50,0.5)" }}>{artworkPlan.styleLabel} · {artworkPlan.title}</p>
+                    </div>
+                    <button
+                      onClick={() => setPhase(phase === "prompt-editing" ? "prompt-review" : "prompt-editing")}
+                      aria-label={phase === "prompt-editing" ? "完成编辑" : "编辑画面描述"}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl active:scale-95"
+                      style={{ background: "rgba(140,108,62,0.09)", color: "rgba(103,73,35,0.72)", fontFamily: "'Noto Sans SC', sans-serif", fontSize: "10.5px" }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M3 11.7V13h1.3l7.6-7.6-1.3-1.3L3 11.7Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                        <path d="m9.9 4.8 1.3 1.3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                      </svg>
+                      {phase === "prompt-editing" ? "完成" : "编辑"}
+                    </button>
+                  </div>
+                  {phase === "prompt-editing" ? (
+                    <textarea
+                      value={draftPrompt}
+                      onChange={(event) => setDraftPrompt(event.target.value.slice(0, 1400))}
+                      autoFocus
+                      rows={8}
+                      aria-label="画面描述"
+                      className="w-full resize-none outline-none"
+                      style={{
+                        fontFamily: "'Noto Sans SC', sans-serif",
+                        fontSize: "12.5px",
+                        lineHeight: 1.75,
+                        color: "rgba(52,37,18,0.86)",
+                        background: "rgba(246,239,227,0.7)",
+                        border: "1px solid rgba(156,118,68,0.25)",
+                        borderRadius: "12px",
+                        padding: "11px 12px",
+                        minHeight: "168px",
+                      }}
+                    />
+                  ) : (
+                    <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "12.5px", lineHeight: 1.8, color: "rgba(55,40,18,0.78)", whiteSpace: "pre-wrap" }}>
+                      {draftPrompt}
+                    </p>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -456,6 +699,63 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {phase === "definition" && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="grid grid-cols-2 gap-2"
+            >
+              <button
+                onClick={handleDefinitionReject}
+                className="py-3.5 rounded-2xl active:scale-95 transition-transform"
+                style={{
+                  fontFamily: "'Noto Sans SC', sans-serif",
+                  fontSize: "12.5px",
+                  color: "rgba(104,78,46,0.7)",
+                  background: "rgba(255,252,245,0.58)",
+                  border: "1px solid rgba(151,113,65,0.22)",
+                }}
+              >
+                不太接近
+              </button>
+              <button
+                onClick={handleDefinitionAccept}
+                className="py-3.5 rounded-2xl active:scale-95 transition-transform"
+                style={{
+                  fontFamily: "'Noto Sans SC', sans-serif",
+                  fontSize: "12.5px",
+                  fontWeight: 500,
+                  color: "rgba(255,249,235,0.96)",
+                  background: "rgba(112,78,38,0.9)",
+                  boxShadow: "0 6px 18px rgba(86,56,24,0.18)",
+                }}
+              >
+                很接近
+              </button>
+            </motion.div>
+          )}
+
+          {(phase === "prompt-review" || phase === "prompt-editing") && (
+            <motion.button
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              onClick={handleArtworkConfirm}
+              disabled={!draftPrompt.trim()}
+              className="w-full py-3.5 rounded-2xl active:scale-[0.98] transition-transform disabled:opacity-40"
+              style={{
+                fontFamily: "'Noto Sans SC', sans-serif",
+                fontSize: "13px",
+                fontWeight: 500,
+                letterSpacing: "0.04em",
+                color: "rgba(255,249,235,0.96)",
+                background: "rgba(112,78,38,0.9)",
+                boxShadow: "0 7px 20px rgba(86,56,24,0.2)",
+              }}
+            >
+              确认画面，开始生成
+            </motion.button>
+          )}
 
           {/* Four fixed choice buttons — 2×2 grid */}
           <AnimatePresence mode="wait">
