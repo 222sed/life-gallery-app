@@ -383,6 +383,11 @@ function emotionDefinition(raw: string, fallbackEmotion: string): { emotion: str
   };
 }
 
+function wasRejectedDefinition(candidate: { emotion: string; definition: string }, rejected: string[]): boolean {
+  const normalized = normalizeDialogueText(`${candidate.emotion}：${candidate.definition}`);
+  return rejected.some((item) => normalizeDialogueText(item) === normalized);
+}
+
 async function createArtworkPlan(
   apiKey: string,
   input: {
@@ -453,15 +458,34 @@ serve(async (req: Request) => {
       : [];
     const finalChoice = [...messages].reverse().find((message) => message.role === "user")?.content ?? emotionLabel;
     const fallbackEmotion = emotionNameFromChoice(finalChoice) || emotionLabel;
-    const result = await callZhipuWithBusyRetry(apiKey, [
+    const definitionMessages: ChatMessage[] = [
       { role: "system", content: EMOTION_DEFINITION_PROMPT },
       {
         role: "user",
         content: `原始记录：${description || "未填写"}\n初始情绪：${emotionLabel}\n三轮对话：\n${messages.map((message) => `${message.role === "assistant" ? "分身" : "旁观者"}：${message.content}`).join("\n")}\n已经否定的定义：${rejected.length ? rejected.join("｜") : "无"}`,
       },
-    ], 360);
+    ];
+    const result = await callZhipuWithBusyRetry(apiKey, definitionMessages, 360);
     if (!result.ok) return errorResponse(respond, result.error);
-    return respond(emotionDefinition(result.reply, fallbackEmotion));
+    let candidate = emotionDefinition(result.reply, fallbackEmotion);
+    if (wasRejectedDefinition(candidate, rejected)) {
+      const retry = await callZhipuWithBusyRetry(apiKey, [
+        {
+          role: "system",
+          content: EMOTION_DEFINITION_PROMPT + " 用户已经明确否定上一版。禁止复用已否定的情绪名称、核心需要和句式；必须从不同的心理焦点重新命名。",
+        },
+        definitionMessages[1],
+      ], 360);
+      if (!retry.ok) return errorResponse(respond, retry.error);
+      candidate = emotionDefinition(retry.reply, fallbackEmotion);
+    }
+    if (wasRejectedDefinition(candidate, rejected)) {
+      candidate = {
+        emotion: "未被说准的在意",
+        definition: "你对上一种命名的否定本身也是线索：真正牵动你的部分还没有被准确看见，这次先把注意放回那份尚未说清的在意。",
+      };
+    }
+    return respond(candidate);
   }
 
   if (route === "artwork-plan") {
