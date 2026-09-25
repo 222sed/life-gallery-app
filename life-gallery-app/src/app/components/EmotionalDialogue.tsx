@@ -17,12 +17,9 @@ interface EmotionDefinition {
   definition: string;
 }
 
-interface ArtworkPlan {
+interface ArtworkScene {
   title: string;
-  description: string;
-  prompt: string;
-  style: string;
-  styleLabel: string;
+  scene: string;
 }
 
 type Phase = "loading" | "choosing" | "custom-input" | "defining" | "definition" | "prompt-loading" | "prompt-review" | "prompt-editing" | "error";
@@ -141,8 +138,8 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
   const [errorStage, setErrorStage] = useState<ErrorStage>("dialogue");
   const [definition, setDefinition] = useState<EmotionDefinition | null>(null);
   const [rejectedDefinitions, setRejectedDefinitions] = useState<string[]>([]);
-  const [artworkPlan, setLocalArtworkPlan] = useState<ArtworkPlan | null>(null);
-  const [draftPrompt, setDraftPrompt] = useState("");
+  const [artworkScene, setLocalArtworkScene] = useState<ArtworkScene | null>(null);
+  const [draftScene, setDraftScene] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const isLoadingRef = useRef(false);
 
@@ -166,7 +163,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
       cancelAnimationFrame(frame);
       window.clearTimeout(timer);
     };
-  }, [phase, messages.length, currentAiText, definition?.emotion, artworkPlan?.prompt]);
+  }, [phase, messages.length, currentAiText, definition?.emotion, artworkScene?.scene]);
 
   const loadAi = useCallback(async (msgs: Message[], r: number) => {
     if (isLoadingRef.current) return;
@@ -220,7 +217,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
     }
   };
 
-  const loadArtworkPlan = async (dialogueMessages: Message[], accepted: EmotionDefinition) => {
+  const loadArtworkScene = async (dialogueMessages: Message[], accepted: EmotionDefinition) => {
     if (isLoadingRef.current) return;
     isLoadingRef.current = true;
     setPhase("prompt-loading");
@@ -232,18 +229,14 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
         description: emotionCtx.description,
         confirmedEmotion: accepted.emotion,
         confirmedText: accepted.definition,
-        styleId: "watercolor",
       });
-      if (!data.prompt?.trim()) throw new Error("画面描述不完整，请重试");
-      const nextPlan = {
+      if (!data.scene?.trim()) throw new Error("画面情景不完整，请重试");
+      const nextScene = {
         title: data.title || accepted.emotion,
-        description: data.description || accepted.definition,
-        prompt: data.prompt.trim(),
-        style: data.style || "watercolor",
-        styleLabel: data.styleLabel || "水彩画",
+        scene: data.scene.trim(),
       };
-      setLocalArtworkPlan(nextPlan);
-      setDraftPrompt(nextPlan.prompt);
+      setLocalArtworkScene(nextScene);
+      setDraftScene(nextScene.scene);
       setPhase("prompt-review");
       scrollToBottom();
     } catch (error) {
@@ -313,18 +306,18 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
   const handleDefinitionAccept = () => {
     if (!definition) return;
     setConfirmedEmotion(definition.emotion, definition.definition);
-    loadArtworkPlan(messages, definition);
+    loadArtworkScene(messages, definition);
   };
 
   const handleArtworkConfirm = () => {
-    if (!artworkPlan || !draftPrompt.trim()) return;
-    setArtworkPlan({ ...artworkPlan, prompt: draftPrompt.trim() });
+    if (!artworkScene || !draftScene.trim()) return;
+    setArtworkPlan({ title: artworkScene.title, scene: draftScene.trim() });
     onNext();
   };
 
   const handleRetry = () => {
     if (errorStage === "definition") loadDefinition(messages, rejectedDefinitions);
-    else if (errorStage === "plan" && definition) loadArtworkPlan(messages, definition);
+    else if (errorStage === "plan" && definition) loadArtworkScene(messages, definition);
     else loadAi(messages, round);
   };
 
@@ -463,7 +456,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
                       marginTop: "9px",
                       letterSpacing: "0.03em",
                     }}>
-                      {phase === "defining" ? "正在为这份感受找到名字…" : "正在把情绪转成画面…"}
+                      {phase === "defining" ? "正在为这份感受找到名字…" : "正在把情绪变成一个小情景…"}
                     </p>
                   )}
                 </div>
@@ -541,7 +534,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
               </motion.div>
             )}
 
-            {(phase === "prompt-review" || phase === "prompt-editing") && artworkPlan && (
+            {(phase === "prompt-review" || phase === "prompt-editing") && artworkScene && (
               <motion.div
                 key="prompt-review"
                 initial={{ opacity: 0, y: 12 }}
@@ -563,11 +556,11 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div>
                       <p style={{ fontFamily: "'Noto Serif SC', serif", fontSize: "16px", color: "rgba(68,45,18,0.9)", marginBottom: "3px" }}>我会这样画下它</p>
-                      <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "10.5px", color: "rgba(118,88,50,0.5)" }}>{artworkPlan.styleLabel} · {artworkPlan.title}</p>
+                      <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "10.5px", color: "rgba(118,88,50,0.5)" }}>画面草案 · {artworkScene.title}</p>
                     </div>
                     <button
                       onClick={() => setPhase(phase === "prompt-editing" ? "prompt-review" : "prompt-editing")}
-                      aria-label={phase === "prompt-editing" ? "完成编辑" : "编辑画面描述"}
+                      aria-label={phase === "prompt-editing" ? "完成编辑" : "编辑画面情景"}
                       className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl active:scale-95"
                       style={{ background: "rgba(140,108,62,0.09)", color: "rgba(103,73,35,0.72)", fontFamily: "'Noto Sans SC', sans-serif", fontSize: "10.5px" }}
                     >
@@ -580,11 +573,11 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
                   </div>
                   {phase === "prompt-editing" ? (
                     <textarea
-                      value={draftPrompt}
-                      onChange={(event) => setDraftPrompt(event.target.value.slice(0, 1400))}
+                      value={draftScene}
+                      onChange={(event) => setDraftScene(event.target.value.slice(0, 500))}
                       autoFocus
                       rows={8}
-                      aria-label="画面描述"
+                      aria-label="画面情景"
                       className="w-full resize-none outline-none"
                       style={{
                         fontFamily: "'Noto Sans SC', sans-serif",
@@ -600,7 +593,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
                     />
                   ) : (
                     <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "12.5px", lineHeight: 1.8, color: "rgba(55,40,18,0.78)", whiteSpace: "pre-wrap" }}>
-                      {draftPrompt}
+                      {draftScene}
                     </p>
                   )}
                 </div>
@@ -755,7 +748,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               onClick={handleArtworkConfirm}
-              disabled={!draftPrompt.trim()}
+              disabled={!draftScene.trim()}
               className="w-full py-3.5 rounded-2xl active:scale-[0.98] transition-transform disabled:opacity-40"
               style={{
                 fontFamily: "'Noto Sans SC', sans-serif",
@@ -767,7 +760,7 @@ export function EmotionalDialogue({ onNext, onBack }: Props) {
                 boxShadow: "0 7px 20px rgba(86,56,24,0.2)",
               }}
             >
-              确认画面，开始生成
+              确认情景，选择画笔
             </motion.button>
           )}
 

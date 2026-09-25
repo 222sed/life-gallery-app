@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { motion } from "motion/react";
 import { emotionCtx, setGeneratedArtwork } from "../store/emotionCtx";
 
@@ -59,9 +59,8 @@ async function requestArtwork(styleId: string): Promise<Record<string, string>> 
         description: emotionCtx.description,
         confirmedEmotion: emotionCtx.confirmedEmotion,
         confirmedText: emotionCtx.confirmedText,
-        prompt: emotionCtx.generatedPrompt,
+        scene: emotionCtx.artworkScene,
         title: emotionCtx.generatedTitle,
-        artworkDescription: emotionCtx.generatedDescription,
         styleId,
       }),
       signal: controller.signal,
@@ -81,19 +80,10 @@ async function requestArtwork(styleId: string): Promise<Record<string, string>> 
 }
 
 export function ArtworkGenerating({ onComplete }: Props) {
-  const preparedStyle = styleProps.find((style) => style.id === emotionCtx.generatedStyle) || styleProps[0];
-  const hasPreparedPrompt = Boolean(emotionCtx.generatedPrompt.trim());
-  const [progress, setProgress] = useState(hasPreparedPrompt ? 4 : 0);
-  const [phase, setPhase] = useState<"choose" | "generating" | "error">(hasPreparedPrompt ? "generating" : "choose");
-  const [selectedStyle, setSelectedStyle] = useState(preparedStyle);
+  const [progress, setProgress] = useState(0);
+  const [phase, setPhase] = useState<"choose" | "generating" | "error">("choose");
+  const [selectedStyle, setSelectedStyle] = useState(styleProps[0]);
   const [error, setError] = useState("");
-  const autoStartedRef = useRef(false);
-
-  useEffect(() => {
-    if (!hasPreparedPrompt || autoStartedRef.current) return;
-    autoStartedRef.current = true;
-    generate(preparedStyle);
-  }, []);
 
   async function generate(style = selectedStyle) {
     setSelectedStyle(style);

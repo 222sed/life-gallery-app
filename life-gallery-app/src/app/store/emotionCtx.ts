@@ -7,6 +7,7 @@ const defaultEmotionCtx = {
   aiFollowUp: "",
   confirmedEmotion: "",
   confirmedText: "",
+  artworkScene: "",
   generatedImageUrl: "",
   generatedPrompt: "",
   generatedTitle: "",
@@ -44,6 +45,7 @@ export function setEmotionCtx(
   emotionCtx.aiFollowUp = aiFollowUp;
   emotionCtx.confirmedEmotion = "";
   emotionCtx.confirmedText = "";
+  emotionCtx.artworkScene = "";
   emotionCtx.generatedImageUrl = "";
   emotionCtx.generatedPrompt = "";
   emotionCtx.generatedTitle = "";
@@ -58,17 +60,13 @@ export function setConfirmedEmotion(emotion: string, text: string) {
 }
 
 export function setArtworkPlan(plan: {
-  prompt: string;
+  scene: string;
   title: string;
-  description: string;
-  style?: string;
-  styleLabel?: string;
 }) {
-  emotionCtx.generatedPrompt = plan.prompt;
+  emotionCtx.artworkScene = plan.scene;
+  emotionCtx.generatedPrompt = "";
   emotionCtx.generatedTitle = plan.title;
-  emotionCtx.generatedDescription = plan.description;
-  emotionCtx.generatedStyle = plan.style || "watercolor";
-  emotionCtx.generatedStyleLabel = plan.styleLabel || "水彩画";
+  emotionCtx.generatedDescription = "";
   persistEmotionCtx();
 }
 
