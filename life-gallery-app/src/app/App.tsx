@@ -22,6 +22,7 @@ import { OthersArtworkDetailWithGuide } from "./components/OthersArtworkDetailWi
 import type { AvatarConfig } from "./types/avatar";
 import { DEFAULT_AVATAR_CONFIG } from "./types/avatar";
 import { othersArtworks, creators } from "./components/mockData";
+import { clearEmotionCtx } from "./store/emotionCtx";
 
 type Screen =
   | "splash"
@@ -152,6 +153,17 @@ export default function App() {
   const handleOthersGalleryArtworkClick = (artworkId: string) => {
     setCurrentArtworkId(artworkId);
     go("others-artwork-with-guide");
+  };
+
+  const handleLogout = () => {
+    clearEmotionCtx();
+    setAvatarConfig(DEFAULT_AVATAR_CONFIG);
+    setCurrentArtworkId(null);
+    setCurrentCreatorId(null);
+    lastGalleryScreen.current = "life-gallery";
+    prevScreen.current = screen;
+    window.sessionStorage.setItem(SCREEN_STORAGE_KEY, "splash");
+    setScreen("splash");
   };
 
   return (
@@ -349,7 +361,12 @@ export default function App() {
                   />
                 );
               })()}
-              {screen === "profile" && <ProfilePage onAvatarManagement={() => go("avatar-management")} />}
+              {screen === "profile" && (
+                <ProfilePage
+                  onAvatarManagement={() => go("avatar-management")}
+                  onLogout={handleLogout}
+                />
+              )}
               {screen === "avatar-management" && (
                 <AvatarManagement
                   avatarConfig={avatarConfig}

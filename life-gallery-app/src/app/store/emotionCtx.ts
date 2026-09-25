@@ -86,3 +86,10 @@ export function setGeneratedArtwork(artwork: {
   emotionCtx.generatedStyleLabel = artwork.styleLabel;
   persistEmotionCtx();
 }
+
+export function clearEmotionCtx() {
+  Object.assign(emotionCtx, defaultEmotionCtx);
+  if (typeof window !== "undefined") {
+    window.sessionStorage.removeItem(STORAGE_KEY);
+  }
+}

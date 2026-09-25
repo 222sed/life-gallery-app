@@ -1,13 +1,14 @@
-import { User, Settings, Bell, Clock, Users, Sparkles } from "lucide-react";
+import { User, Settings, Bell, Clock, Users, Sparkles, LogOut } from "lucide-react";
 import { motion } from "motion/react";
 const galleryBg = "https://images.unsplash.com/photo-1580136579312-94651dfd596d?w=800&h=1200&fit=crop&auto=format";
 
 interface ProfilePageProps {
   onBack?: () => void;
   onAvatarManagement?: () => void;
+  onLogout?: () => void;
 }
 
-export function ProfilePage({ onBack, onAvatarManagement }: ProfilePageProps) {
+export function ProfilePage({ onBack, onAvatarManagement, onLogout }: ProfilePageProps) {
   return (
     <div className="h-full relative overflow-hidden">
       {/* Blurred gallery background — fixed to frame, never scrolls */}
@@ -154,6 +155,25 @@ export function ProfilePage({ onBack, onAvatarManagement }: ProfilePageProps) {
           onClick={() => {}}
           delay={0.62}
         />
+        <motion.button
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.38, delay: 0.67 }}
+          onClick={() => onLogout?.()}
+          className="w-full flex items-center justify-center gap-2.5 mt-3 py-3.5 rounded-2xl transition-all duration-200 active:scale-[0.983]"
+          style={{
+            background: "rgba(255,252,245,0.42)",
+            border: "1px solid rgba(150,104,76,0.2)",
+            color: "rgba(112,72,52,0.72)",
+            fontFamily: "'Noto Sans SC', sans-serif",
+            fontSize: "13px",
+            letterSpacing: "0.04em",
+            backdropFilter: "blur(20px)",
+          }}
+        >
+          <LogOut size={16} strokeWidth={1.6} />
+          退出登录
+        </motion.button>
       </motion.div>
       </div>  {/* end scrollable content layer */}
     </div>
