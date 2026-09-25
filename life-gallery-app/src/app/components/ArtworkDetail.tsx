@@ -1,6 +1,7 @@
 import { artworks, styleLabel } from "./mockData";
 import doorThresholdImg from "../../imports/_____20260608023451_3917_642.png";
 import { emotionCtx } from "../store/emotionCtx";
+import { saveArtwork } from "../store/savedArtworks";
 
 interface Props {
   onBack: () => void;
@@ -23,6 +24,22 @@ export function ArtworkDetail({ onBack, onToLifeGallery, onToSketchRoom }: Props
     imageUrl: fallback.imageUrl.includes("_____20260608023451_3917_642.png") ? doorThresholdImg : fallback.imageUrl,
     styleName: styleLabel[fallback.style],
   };
+
+  const saveAndOpen = (destination: "gallery" | "sketch") => {
+    if (emotionCtx.generatedImageUrl) {
+      saveArtwork({
+        imageUrl: artwork.imageUrl,
+        title: artwork.title,
+        style: artwork.style,
+        description: artwork.description,
+        emotionTags: artwork.emotionTags,
+        date: artwork.date,
+      }, destination);
+    }
+    if (destination === "gallery") onToLifeGallery();
+    else onToSketchRoom();
+  };
+
   return (
     <div className="relative w-full h-full overflow-hidden flex flex-col">
       <div
@@ -153,7 +170,7 @@ export function ArtworkDetail({ onBack, onToLifeGallery, onToSketchRoom }: Props
         {/* Actions */}
         <div className="px-6 pb-28 flex flex-col gap-3">
           <button
-            onClick={onToLifeGallery}
+            onClick={() => saveAndOpen("gallery")}
             className="w-full py-4 rounded-2xl text-[15px] transition-all duration-200 active:scale-98"
             style={{
               background: "linear-gradient(135deg, #5a3520 0%, #3d2410 100%)",
@@ -166,7 +183,7 @@ export function ArtworkDetail({ onBack, onToLifeGallery, onToSketchRoom }: Props
             挂入人生画廊
           </button>
           <button
-            onClick={onToSketchRoom}
+            onClick={() => saveAndOpen("sketch")}
             className="w-full py-4 rounded-2xl text-[14px] transition-all duration-200 active:scale-98"
             style={{
               background: "rgba(240,228,210,0.7)",

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { artworks, dailySketches, styleLabel } from "./mockData";
 import useEmblaCarousel from "embla-carousel-react";
 import doorThresholdImg from "../../imports/_____20260608023451_3917_642.png";
+import { getSavedArtworks } from "../store/savedArtworks";
 
 export type GalleryType = "main" | "daily";
 
@@ -29,34 +30,40 @@ const artworkSizes = [
   { w: 205, h: 235 },
 ];
 
-// Recent works for the panel — combine life + daily, interleaved
-const recentWorks = [
-  ...artworks.filter((a) => a.isLifeGallery),
-  ...artworks.filter((a) => a.isDailyGallery),
-  ...dailySketches.map((d) => ({
-    id: d.id,
-    title: d.title,
-    date: d.date,
-    style: d.style,
-    imageUrl: d.imageUrl,
-    emotionTags: [`#${d.emotionTag}`],
-    description: "",
-    isLifeGallery: false,
-    isDailyGallery: false,
-  })),
-];
-
-// Split into two columns for masonry layout
-const col1 = recentWorks.filter((_, i) => i % 2 === 0);
-const col2 = recentWorks.filter((_, i) => i % 2 === 1);
-
 // Thumbnail heights that alternate to create natural masonry variance
 const thumbHeights = [120, 90, 110, 80, 130, 95, 105, 85];
 
 export function LifeGalleryHall({ galleryType = "main", onSwitchGallery, onArtworkDetail }: Props) {
-  const galleryArtworks = artworks.filter((a) =>
+  const savedGalleryArtworks = getSavedArtworks("gallery").map((artwork) => ({
+    ...artwork,
+    isLifeGallery: true,
+    isDailyGallery: false,
+  }));
+  const galleryArtworks = [
+    ...(galleryType === "main" ? savedGalleryArtworks : []),
+    ...artworks.filter((a) =>
     galleryType === "main" ? a.isLifeGallery : a.isDailyGallery
-  );
+    ),
+  ];
+
+  const recentWorks = [
+    ...savedGalleryArtworks,
+    ...artworks.filter((a) => a.isLifeGallery),
+    ...artworks.filter((a) => a.isDailyGallery),
+    ...dailySketches.map((d) => ({
+      id: d.id,
+      title: d.title,
+      date: d.date,
+      style: d.style,
+      imageUrl: d.imageUrl,
+      emotionTags: [`#${d.emotionTag}`],
+      description: "",
+      isLifeGallery: false,
+      isDailyGallery: false,
+    })),
+  ];
+  const col1 = recentWorks.filter((_, i) => i % 2 === 0);
+  const col2 = recentWorks.filter((_, i) => i % 2 === 1);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -90,9 +97,7 @@ export function LifeGalleryHall({ galleryType = "main", onSwitchGallery, onArtwo
   const onScrollFloor = useCallback(() => {
     if (!emblaApi) return;
     const progress = emblaApi.scrollProgress();
-    const totalSlides = galleryType === "main"
-      ? artworks.filter((a) => a.isLifeGallery).length
-      : artworks.filter((a) => a.isDailyGallery).length;
+    const totalSlides = galleryArtworks.length;
     const span = Math.max(1, totalSlides - 1);
 
     // Floor parallax
@@ -103,7 +108,7 @@ export function LifeGalleryHall({ galleryType = "main", onSwitchGallery, onArtwo
       floorPlaneRef.current.style.backgroundPosition = `${p}, ${p}, ${p}, ${p}, ${p}, 0 0`;
     }
 
-  }, [emblaApi, galleryType]);
+  }, [emblaApi, galleryArtworks.length]);
 
   useEffect(() => {
     if (!emblaApi) return;

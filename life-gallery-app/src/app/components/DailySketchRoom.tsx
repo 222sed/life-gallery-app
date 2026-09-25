@@ -1,4 +1,5 @@
 import { motion } from "motion/react";
+import { getSavedArtworks } from "../store/savedArtworks";
 
 interface Props {
   onBack: () => void;
@@ -53,6 +54,8 @@ const quickEntries = [
 ];
 
 export function DailySketchRoom({ onBack }: Props) {
+  const savedSketches = getSavedArtworks("sketch");
+
   return (
     <div className="h-full relative overflow-hidden">
       {/* Background — fixed, same as explorer page */}
@@ -109,6 +112,52 @@ export function DailySketchRoom({ onBack }: Props) {
             有些情绪，还没有成为画。
           </p>
         </motion.div>
+
+        {savedSketches.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.38, delay: 0.08 }}
+            className="px-5 mt-5 mb-1"
+          >
+            <div className="flex items-end justify-between mb-3">
+              <div>
+                <p style={{ fontFamily: "'Noto Serif SC', serif", fontSize: "13px", color: "rgba(75,58,40,0.78)", fontWeight: 500, letterSpacing: "0.04em" }}>
+                  已保存的画
+                </p>
+                <p style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "10px", color: "rgba(140,108,62,0.42)", marginTop: "3px" }}>
+                  最近保存的排在最前面
+                </p>
+              </div>
+              <span style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "10px", color: "rgba(140,108,62,0.4)" }}>
+                {savedSketches.length} 幅
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {savedSketches.map((artwork, index) => (
+                <div key={artwork.id} className="rounded-2xl overflow-hidden" style={glassCard}>
+                  <div className="relative aspect-square overflow-hidden">
+                    <img src={artwork.imageUrl} alt={artwork.title} className="w-full h-full object-cover" />
+                    {index === 0 && (
+                      <span className="absolute top-2 left-2 px-2 py-1 rounded-full" style={{ background: "rgba(250,246,238,0.82)", backdropFilter: "blur(10px)", fontFamily: "'Noto Sans SC', sans-serif", fontSize: "9px", color: "rgba(95,66,32,0.7)" }}>
+                        刚刚保存
+                      </span>
+                    )}
+                  </div>
+                  <div className="px-3 py-3">
+                    <p className="truncate" style={{ fontFamily: "'Noto Serif SC', serif", fontSize: "13px", color: "rgba(55,40,18,0.84)", fontWeight: 500 }}>
+                      {artwork.title}
+                    </p>
+                    <p className="truncate mt-1" style={{ fontFamily: "'Noto Sans SC', sans-serif", fontSize: "10px", color: "rgba(140,108,62,0.46)" }}>
+                      {artwork.emotionTags.join(" · ")}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         {/* ── Stats card ── */}
         <motion.div
