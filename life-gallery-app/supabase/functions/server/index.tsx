@@ -325,7 +325,12 @@ async function callZhipuImage(apiKey: string, prompt: string): Promise<ImageResu
     res = await fetch(ZHIPU_IMAGE_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
-      body: JSON.stringify({ model: IMAGE_MODEL, prompt, size: "864x1152" }),
+      body: JSON.stringify({
+        model: IMAGE_MODEL,
+        prompt,
+        size: "864x1152",
+        watermark_enabled: false,
+      }),
       signal: controller.signal,
     });
   } catch (error) {
